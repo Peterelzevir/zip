@@ -1,4 +1,5 @@
-const { Telegraf, Markup, Scenes, session } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
+const { Scenes } = require('telegraf');
 const AdmZip = require('adm-zip');
 const { Octokit } = require('@octokit/rest');
 const fs = require('fs');
@@ -6,13 +7,14 @@ const path = require('path');
 const os = require('os');
 const axios = require('axios');
 const LocalSession = require('telegraf-session-local');
-// Bot configuration - Masukkan token bot Telegram dari BotFather di sini
+
+// Bot configuration - Telegram bot token from BotFather
 const BOT_TOKEN = '7332933814:AAGm2mbyQM6UyMQGggJyXbRsAgESv5c1uk8';
 const bot = new Telegraf(BOT_TOKEN);
 
-// Daftar ID Telegram user yang bisa menggunakan bot (admin)
-// Contoh: [123456789, 987654321]
-const ADMIN_IDS = [5988451717]; // Ganti dengan ID Telegram admin
+// List of Telegram user IDs that can use the bot (admins)
+// Example: [123456789, 987654321]
+const ADMIN_IDS = [5988451717]; // Replace with your admin Telegram ID
 const tempDir = path.join(os.tmpdir(), 'telegram-zip-github-bot');
 
 // Create temp directory if it doesn't exist
@@ -31,6 +33,18 @@ const isAdmin = (ctx, next) => {
   }
   return ctx.reply('⛔ Maaf, hanya admin yang dapat menggunakan bot ini.');
 };
+
+// Setup persistent session storage
+const localSession = new LocalSession({
+  database: 'session_db.json',
+  property: 'session',
+  storage: LocalSession.storageMemory,
+  format: {
+    serialize: (obj) => JSON.stringify(obj),
+    deserialize: (str) => JSON.parse(str),
+  },
+  state: { zipPath: null, extractDir: null, github: null, fileName: null }
+});
 
 // Setup scenes for workflow
 const { BaseScene } = Scenes;
@@ -128,234 +142,6 @@ githubCredentialsScene.action('cancel', (ctx) => {
   return ctx.scene.leave();
 });
 
-// Catatan: Konfigurasi scene management sudah dipindahkan ke bawah
-
-// Start command
-bot.start((ctx) => {
-  return ctx.reply(
-    `👋 Halo ${ctx.from.first_name}!\n\n` +
-    '🤖 Saya adalah bot yang dapat membantu Anda mengekstrak file ZIP dan mengunggahnya ke GitHub.\n\n' +
-    '🔑 Untuk memulai, gunakan perintah /upload_zip',
-    Markup.inlineKeyboard([
-      Markup.button.callback('📚 Tutorial', 'tutorial'),
-      Markup.button.callback('ℹ️ Tentang Bot', 'about')
-    ])
-  );
-});
-
-// Help command
-bot.help((ctx) => {
-  return ctx.reply(
-    '🔍 Daftar Perintah:\n\n' +
-    '/start - Mulai bot\n' +
-    '/upload_zip - Unggah file ZIP untuk diproses\n' +
-    '/help - Tampilkan bantuan\n\n' +
-    '🔒 Catatan: Hanya admin yang dapat menggunakan bot ini.'
-  );
-});
-
-// Tutorial action
-bot.action('tutorial', (ctx) => {
-  ctx.deleteMessage();
-  return ctx.reply(
-    '📚 Tutorial Penggunaan Bot:\n\n' +
-    '1️⃣ Gunakan perintah /upload_zip\n' +
-    '2️⃣ Unggah file ZIP yang ingin diproses\n' +
-    '3️⃣ Masukkan kredensial GitHub Anda\n' +
-    '4️⃣ Bot akan mengekstrak file ZIP dan mengunggahnya ke GitHub\n' +
-    '5️⃣ Anda akan menerima notifikasi ketika proses selesai\n\n' +
-    '🔑 Catatan:\n' +
-    '- Anda memerlukan Personal Access Token GitHub dengan akses repo\n' +
-    '- Format kredensial: Username, Token, dan Repository (owner/repo)',
-    Markup.inlineKeyboard([
-      Markup.button.callback('◀️ Kembali', 'back_to_main')
-    ])
-  );
-});
-
-// About action
-bot.action('about', (ctx) => {
-  ctx.deleteMessage();
-  return ctx.reply(
-    'ℹ️ Tentang Bot:\n\n' +
-    '🤖 Bot Telegram untuk ekstrak ZIP dan push ke GitHub\n' +
-    '🔒 Fitur admin untuk mengontrol akses\n' +
-    '🔄 Dukungan file ZIP besar\n' +
-    '📊 Pembaruan progres secara real-time\n' +
-    '📁 Data pengguna tidak disimpan secara permanen\n\n' +
-    '⚙️ Dibuat dengan Node.js, Telegraf, AdmZip, dan Octokit',
-    Markup.inlineKeyboard([
-      Markup.button.callback('◀️ Kembali', 'back_to_main')
-    ])
-  );
-});
-
-// Back to main action
-bot.action('back_to_main', (ctx) => {
-  ctx.deleteMessage();
-  return ctx.reply(
-    `👋 Halo ${ctx.from.first_name}!\n\n` +
-    '🤖 Saya adalah bot yang dapat membantu Anda mengekstrak file ZIP dan mengunggahnya ke GitHub.\n\n' +
-    '🔑 Untuk memulai, gunakan perintah /upload_zip',
-    Markup.inlineKeyboard([
-      Markup.button.callback('📚 Tutorial', 'tutorial'),
-      Markup.button.callback('ℹ️ Tentang Bot', 'about')
-    ])
-  );
-});
-
-// Upload ZIP command
-bot.command('upload_zip', isAdmin, (ctx) => {
-  return ctx.reply(
-    '📤 Silakan unggah file ZIP yang ingin diproses.',
-    Markup.inlineKeyboard([
-      Markup.button.callback('❌ Batal', 'cancel_upload')
-    ])
-  );
-});
-
-// Cancel upload action
-bot.action('cancel_upload', (ctx) => {
-  ctx.deleteMessage();
-  return ctx.reply('❌ Unggahan dibatalkan.');
-});
-
-// Handle ZIP file upload
-bot.on('document', isAdmin, async (ctx) => {
-  const fileId = ctx.message.document.file_id;
-  const fileName = ctx.message.document.file_name;
-  
-  // Check if file is a ZIP
-  if (!fileName.endsWith('.zip')) {
-    return ctx.reply('❌ Hanya file ZIP yang dapat diproses.');
-  }
-  
-  const statusMsg = await ctx.reply('🔄 Mengunduh file ZIP...');
-  
-  try {
-    // Download file
-    const fileLink = await ctx.telegram.getFileLink(fileId);
-    const zipPath = path.join(tempDir, fileName);
-    
-    // Download file using axios
-    const response = await axios({
-      method: 'GET',
-      url: fileLink.toString(),
-      responseType: 'stream'
-    });
-    
-    // Create a writable stream
-    const fileStream = fs.createWriteStream(zipPath);
-    
-    // Pipe the response data to the file
-    const downloadPromise = new Promise((resolve, reject) => {
-      response.data.pipe(fileStream);
-      fileStream.on('finish', resolve);
-      fileStream.on('error', reject);
-    });
-    
-    await downloadPromise;
-    
-    await ctx.telegram.editMessageText(
-      statusMsg.chat.id,
-      statusMsg.message_id,
-      undefined,
-      '✅ File ZIP berhasil diunduh!',
-      Markup.inlineKeyboard([
-        Markup.button.callback('📂 Ekstrak ZIP', 'extract_zip')
-      ])
-    );
-    
-    // Store file path in session
-    ctx.session = ctx.session || {};
-    ctx.session.zipPath = zipPath;
-    ctx.session.fileName = fileName;
-    
-  } catch (error) {
-    await ctx.telegram.editMessageText(
-      statusMsg.chat.id,
-      statusMsg.message_id,
-      undefined,
-      `❌ Gagal mengunduh file: ${error.message}`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('🔄 Coba Lagi', 'retry_upload')
-      ])
-    );
-  }
-});
-
-// Extract ZIP action
-bot.action('extract_zip', async (ctx) => {
-  if (!ctx.session || !ctx.session.zipPath) {
-    return ctx.reply('❌ Tidak ada file ZIP untuk diekstrak. Silakan unggah file terlebih dahulu.');
-  }
-  
-  const zipPath = ctx.session.zipPath;
-  const extractDir = path.join(tempDir, 'extracted_' + Date.now());
-  
-  // Create extract directory
-  if (!fs.existsSync(extractDir)) {
-    fs.mkdirSync(extractDir, { recursive: true });
-  }
-  
-  const statusMsg = await ctx.editMessageText(
-    '🔄 Mengekstrak file ZIP...',
-    Markup.inlineKeyboard([
-      Markup.button.callback('❌ Batal', 'cancel_extract')
-    ])
-  );
-  
-  try {
-    // Extract ZIP
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(extractDir, true);
-    
-    // List extracted files
-    const files = fs.readdirSync(extractDir);
-    
-    await ctx.telegram.editMessageText(
-      statusMsg.chat.id,
-      statusMsg.message_id,
-      undefined,
-      `✅ File ZIP berhasil diekstrak!\n\n📂 Total file: ${files.length}`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('🚀 Push ke GitHub', 'github_auth')
-      ])
-    );
-    
-    // Store extract directory in session
-    ctx.session.extractDir = extractDir;
-    
-  } catch (error) {
-    await ctx.telegram.editMessageText(
-      statusMsg.chat.id,
-      statusMsg.message_id,
-      undefined,
-      `❌ Gagal mengekstrak file: ${error.message}`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('🔄 Coba Lagi', 'retry_extract')
-      ])
-    );
-  }
-});
-
-// Cancel extract action
-bot.action('cancel_extract', (ctx) => {
-  ctx.deleteMessage();
-  return ctx.reply('❌ Ekstraksi dibatalkan.');
-});
-
-// Retry extract action
-bot.action('retry_extract', (ctx) => {
-  ctx.deleteMessage();
-  return ctx.callbackQuery('extract_zip');
-});
-
-// GitHub authorization action
-bot.action('github_auth', (ctx) => {
-  return ctx.scene.enter('github_credentials');
-});
-
 // Scene for creating a new repository
 const createRepoScene = new BaseScene('create_repo');
 createRepoScene.enter((ctx) => {
@@ -381,7 +167,7 @@ createRepoScene.on('text', async (ctx) => {
     );
   }
   
-  // Pastikan data ZIP masih tersimpan
+  // Make sure ZIP data is still stored
   if (!ctx.session.zipPath || !ctx.session.extractDir) {
     return ctx.reply(
       '❌ Data ZIP hilang. Silakan mulai proses dari awal dengan mengunggah file ZIP.',
@@ -518,15 +304,15 @@ selectRepoScene.enter(async (ctx) => {
 selectRepoScene.action(/select_repo:(.+)/, (ctx) => {
   const repoFullName = ctx.match[1];
   
-  // Pastikan session tetap utuh
+  // Make sure session remains intact
   if (!ctx.session.github) {
     ctx.session.github = {};
   }
   
-  // Simpan nama repo
+  // Save repo name
   ctx.session.github.repo = repoFullName;
   
-  // Pastikan data ZIP masih tersimpan
+  // Make sure ZIP data is still stored
   if (!ctx.session.zipPath || !ctx.session.extractDir) {
     ctx.deleteMessage();
     return ctx.reply(
@@ -554,24 +340,267 @@ selectRepoScene.action('cancel', (ctx) => {
   return ctx.scene.leave();
 });
 
-// Session middleware with memory storage
-// LocalSession sudah dideklarasikan di atas, jadi tidak perlu dideklarasikan lagi
-const localSession = new LocalSession({ database: 'session_db.json' });
-
-// Set up additional scenes
-const stageWithNewScenes = new Scenes.Stage([
+// Set up scenes stage
+const stage = new Scenes.Stage([
   githubCredentialsScene, 
   createRepoScene, 
   selectRepoScene
 ]);
 
-// Gunakan localSession untuk penyimpanan yang lebih persisten
+// Use session middleware and stage middleware
 bot.use(localSession.middleware());
-bot.use(stageWithNewScenes.middleware());
+bot.use(stage.middleware());
+
+// Start command
+bot.start((ctx) => {
+  return ctx.reply(
+    `👋 Halo ${ctx.from.first_name}!\n\n` +
+    '🤖 Saya adalah bot yang dapat membantu Anda mengekstrak file ZIP dan mengunggahnya ke GitHub.\n\n' +
+    '🔑 Untuk memulai, gunakan perintah /upload_zip',
+    Markup.inlineKeyboard([
+      Markup.button.callback('📚 Tutorial', 'tutorial'),
+      Markup.button.callback('ℹ️ Tentang Bot', 'about')
+    ])
+  );
+});
+
+// Help command
+bot.help((ctx) => {
+  return ctx.reply(
+    '🔍 Daftar Perintah:\n\n' +
+    '/start - Mulai bot\n' +
+    '/upload_zip - Unggah file ZIP untuk diproses\n' +
+    '/help - Tampilkan bantuan\n\n' +
+    '🔒 Catatan: Hanya admin yang dapat menggunakan bot ini.'
+  );
+});
+
+// Tutorial action
+bot.action('tutorial', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.deleteMessage();
+  return ctx.reply(
+    '📚 Tutorial Penggunaan Bot:\n\n' +
+    '1️⃣ Gunakan perintah /upload_zip\n' +
+    '2️⃣ Unggah file ZIP yang ingin diproses\n' +
+    '3️⃣ Masukkan kredensial GitHub Anda\n' +
+    '4️⃣ Bot akan mengekstrak file ZIP dan mengunggahnya ke GitHub\n' +
+    '5️⃣ Anda akan menerima notifikasi ketika proses selesai\n\n' +
+    '🔑 Catatan:\n' +
+    '- Anda memerlukan Personal Access Token GitHub dengan akses repo\n' +
+    '- Format kredensial: Username, Token, dan Repository (owner/repo)',
+    Markup.inlineKeyboard([
+      Markup.button.callback('◀️ Kembali', 'back_to_main')
+    ])
+  );
+});
+
+// About action
+bot.action('about', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.deleteMessage();
+  return ctx.reply(
+    'ℹ️ Tentang Bot:\n\n' +
+    '🤖 Bot Telegram untuk ekstrak ZIP dan push ke GitHub\n' +
+    '🔒 Fitur admin untuk mengontrol akses\n' +
+    '🔄 Dukungan file ZIP besar\n' +
+    '📊 Pembaruan progres secara real-time\n' +
+    '📁 Data pengguna tidak disimpan secara permanen\n\n' +
+    '⚙️ Dibuat dengan Node.js, Telegraf, AdmZip, dan Octokit',
+    Markup.inlineKeyboard([
+      Markup.button.callback('◀️ Kembali', 'back_to_main')
+    ])
+  );
+});
+
+// Back to main action
+bot.action('back_to_main', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.deleteMessage();
+  return ctx.reply(
+    `👋 Halo ${ctx.from.first_name}!\n\n` +
+    '🤖 Saya adalah bot yang dapat membantu Anda mengekstrak file ZIP dan mengunggahnya ke GitHub.\n\n' +
+    '🔑 Untuk memulai, gunakan perintah /upload_zip',
+    Markup.inlineKeyboard([
+      Markup.button.callback('📚 Tutorial', 'tutorial'),
+      Markup.button.callback('ℹ️ Tentang Bot', 'about')
+    ])
+  );
+});
+
+// Upload ZIP command
+bot.command('upload_zip', isAdmin, (ctx) => {
+  return ctx.reply(
+    '📤 Silakan unggah file ZIP yang ingin diproses.',
+    Markup.inlineKeyboard([
+      Markup.button.callback('❌ Batal', 'cancel_upload')
+    ])
+  );
+});
+
+// Upload ZIP action for callbacks
+bot.action('upload_zip_action', isAdmin, (ctx) => {
+  ctx.answerCbQuery();
+  ctx.deleteMessage();
+  return ctx.reply(
+    '📤 Silakan unggah file ZIP yang ingin diproses.',
+    Markup.inlineKeyboard([
+      Markup.button.callback('❌ Batal', 'cancel_upload')
+    ])
+  );
+});
+
+// Cancel upload action
+bot.action('cancel_upload', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.deleteMessage();
+  return ctx.reply('❌ Unggahan dibatalkan.');
+});
+
+// Handle ZIP file upload
+bot.on('document', isAdmin, async (ctx) => {
+  const fileId = ctx.message.document.file_id;
+  const fileName = ctx.message.document.file_name;
+  
+  // Check if file is a ZIP
+  if (!fileName.endsWith('.zip')) {
+    return ctx.reply('❌ Hanya file ZIP yang dapat diproses.');
+  }
+  
+  const statusMsg = await ctx.reply('🔄 Mengunduh file ZIP...');
+  
+  try {
+    // Download file
+    const fileLink = await ctx.telegram.getFileLink(fileId);
+    const zipPath = path.join(tempDir, fileName);
+    
+    // Download file using axios
+    const response = await axios({
+      method: 'GET',
+      url: fileLink.toString(),
+      responseType: 'stream'
+    });
+    
+    // Create a writable stream
+    const fileStream = fs.createWriteStream(zipPath);
+    
+    // Pipe the response data to the file
+    const downloadPromise = new Promise((resolve, reject) => {
+      response.data.pipe(fileStream);
+      fileStream.on('finish', resolve);
+      fileStream.on('error', reject);
+    });
+    
+    await downloadPromise;
+    
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      '✅ File ZIP berhasil diunduh!',
+      Markup.inlineKeyboard([
+        Markup.button.callback('📂 Ekstrak ZIP', 'extract_zip')
+      ])
+    );
+    
+    // Store file path in session
+    ctx.session.zipPath = zipPath;
+    ctx.session.fileName = fileName;
+    
+  } catch (error) {
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      `❌ Gagal mengunduh file: ${error.message}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('🔄 Coba Lagi', 'retry_upload')
+      ])
+    );
+  }
+});
+
+// Extract ZIP action
+bot.action('extract_zip', async (ctx) => {
+  ctx.answerCbQuery();
+  
+  if (!ctx.session || !ctx.session.zipPath) {
+    return ctx.reply('❌ Tidak ada file ZIP untuk diekstrak. Silakan unggah file terlebih dahulu.');
+  }
+  
+  const zipPath = ctx.session.zipPath;
+  const extractDir = path.join(tempDir, 'extracted_' + Date.now());
+  
+  // Create extract directory
+  if (!fs.existsSync(extractDir)) {
+    fs.mkdirSync(extractDir, { recursive: true });
+  }
+  
+  const statusMsg = await ctx.editMessageText(
+    '🔄 Mengekstrak file ZIP...',
+    Markup.inlineKeyboard([
+      Markup.button.callback('❌ Batal', 'cancel_extract')
+    ])
+  );
+  
+  try {
+    // Extract ZIP
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(extractDir, true);
+    
+    // List extracted files
+    const files = fs.readdirSync(extractDir);
+    
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      `✅ File ZIP berhasil diekstrak!\n\n📂 Total file: ${files.length}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('🚀 Push ke GitHub', 'github_auth')
+      ])
+    );
+    
+    // Store extract directory in session
+    ctx.session.extractDir = extractDir;
+    
+  } catch (error) {
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      `❌ Gagal mengekstrak file: ${error.message}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('🔄 Coba Lagi', 'retry_extract')
+      ])
+    );
+  }
+});
+
+// Cancel extract action
+bot.action('cancel_extract', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.deleteMessage();
+  return ctx.reply('❌ Ekstraksi dibatalkan.');
+});
+
+// Retry extract action
+bot.action('retry_extract', (ctx) => {
+  ctx.answerCbQuery();
+  return ctx.callbackQuery('extract_zip');
+});
+
+// GitHub authorization action
+bot.action('github_auth', (ctx) => {
+  ctx.answerCbQuery();
+  return ctx.scene.enter('github_credentials');
+});
 
 // Action handlers for repository options
 bot.action('create_new_repo', (ctx) => {
-  // Pastikan data ZIP masih tersimpan
+  ctx.answerCbQuery();
+  
+  // Make sure ZIP data is still stored
   if (!ctx.session || !ctx.session.zipPath || !ctx.session.extractDir) {
     ctx.deleteMessage();
     return ctx.reply(
@@ -587,7 +616,9 @@ bot.action('create_new_repo', (ctx) => {
 });
 
 bot.action('use_existing_repo', (ctx) => {
-  // Pastikan data ZIP masih tersimpan
+  ctx.answerCbQuery();
+  
+  // Make sure ZIP data is still stored
   if (!ctx.session || !ctx.session.zipPath || !ctx.session.extractDir) {
     ctx.deleteMessage();
     return ctx.reply(
@@ -604,6 +635,8 @@ bot.action('use_existing_repo', (ctx) => {
 
 // Process ZIP and push to GitHub action
 bot.action('process_zip', async (ctx) => {
+  ctx.answerCbQuery();
+  
   if (!ctx.session || !ctx.session.extractDir || !ctx.session.github) {
     return ctx.reply('❌ Data tidak lengkap. Silakan mulai dari awal.');
   }
@@ -812,6 +845,7 @@ bot.action('process_zip', async (ctx) => {
 
 // Cancel GitHub upload action
 bot.action('cancel_github', (ctx) => {
+  ctx.answerCbQuery();
   ctx.deleteMessage();
   
   // Clean up temporary files if they exist
