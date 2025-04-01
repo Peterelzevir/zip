@@ -76,70 +76,7 @@ bot.command('cancel', (ctx) => {
   }
 });
 
-// Handle incoming ZIP files
-bot.on(message('document'), async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    const fileId = ctx.message.document.file_id;
-    const fileName = ctx.message.document.file_name;
-    
-    // Check if file is a ZIP
-    if (!fileName.toLowerCase().endsWith('.zip')) {
-      return ctx.reply('⚠️ Mohon kirim file dengan format ZIP.');
-    }
-    
-    // Create a new session
-    const sessionId = uuidv4();
-    const sessionDir = path.join(tempDir, sessionId);
-    fs.mkdirSync(sessionDir);
-    
-    const originalZipPath = path.join(sessionDir, fileName);
-    const extractPath = path.join(sessionDir, 'extracted');
-    fs.mkdirSync(extractPath);
-    
-    // Status message
-    const statusMsg = await ctx.reply('⏳ Mengunduh file ZIP...');
-    
-    // Download file
-    const fileLink = await ctx.telegram.getFileLink(fileId);
-    const response = await fetch(fileLink);
-    const buffer = await response.arrayBuffer();
-    fs.writeFileSync(originalZipPath, Buffer.from(buffer));
-    
-    // Extract ZIP
-    await ctx.telegram.editMessageText(
-      ctx.chat.id, 
-      statusMsg.message_id, 
-      null, 
-      '⏳ Mengekstrak file ZIP...'
-    );
-    
-    const zip = new AdmZip(originalZipPath);
-    zip.extractAllTo(extractPath, true);
-    
-    // Get list of files
-    const fileList = getAllFiles(extractPath).map(file => 
-      path.relative(extractPath, file)
-    );
-    
-    // Save session data
-    userSessions[userId] = {
-      sessionId,
-      originalZipPath,
-      extractPath,
-      fileList,
-      originalFileName: fileName,
-      currentZipName: fileName
-    };
-    
-    // Show file list
-    await showFileList(ctx, userId, statusMsg.message_id);
-    
-  } catch (error) {
-    console.error('Error handling ZIP file:', error);
-    ctx.reply('❌ Terjadi kesalahan saat memproses file ZIP.');
-  }
-});
+// MENGHAPUS INI - Handler awal sudah dipindah ke handler gabungan di bawah
 
 // Show file list with pagination
 async function showFileList(ctx, userId, messageId = null, page = 0) {
@@ -255,7 +192,7 @@ bot.action('replace', async (ctx) => {
   session.waitingForFile = true;
   
   await ctx.editMessageText(
-    `📤 *Ganti File*\n\nKirim file baru untuk mengganti:\n\`${session.selectedFile}\`\n\nAtau klik batal untuk kembali.`,
+    `📤 *Ganti File*\n\nKirim file baru (format apapun) untuk mengganti:\n\`${session.selectedFile}\`\n\nAtau klik batal untuk kembali.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
