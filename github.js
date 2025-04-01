@@ -555,7 +555,7 @@ selectRepoScene.action('cancel', (ctx) => {
 });
 
 // Session middleware with memory storage
-const LocalSession = require('telegraf-session-local');
+// LocalSession sudah dideklarasikan di atas, jadi tidak perlu dideklarasikan lagi
 const localSession = new LocalSession({ database: 'session_db.json' });
 
 // Set up additional scenes
