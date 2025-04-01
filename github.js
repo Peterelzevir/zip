@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const axios = require('axios');
+const LocalSession = require('telegraf-session-local');
 // Bot configuration - Masukkan token bot Telegram dari BotFather di sini
 const BOT_TOKEN = '7332933814:AAGm2mbyQM6UyMQGggJyXbRsAgESv5c1uk8';
 const bot = new Telegraf(BOT_TOKEN);
@@ -380,6 +381,16 @@ createRepoScene.on('text', async (ctx) => {
     );
   }
   
+  // Pastikan data ZIP masih tersimpan
+  if (!ctx.session.zipPath || !ctx.session.extractDir) {
+    return ctx.reply(
+      '❌ Data ZIP hilang. Silakan mulai proses dari awal dengan mengunggah file ZIP.',
+      Markup.inlineKeyboard([
+        Markup.button.callback('📤 Upload ZIP Baru', 'upload_zip_action')
+      ])
+    );
+  }
+  
   const statusMsg = await ctx.reply('🔄 Membuat repository baru...');
   
   try {
@@ -506,7 +517,25 @@ selectRepoScene.enter(async (ctx) => {
 
 selectRepoScene.action(/select_repo:(.+)/, (ctx) => {
   const repoFullName = ctx.match[1];
+  
+  // Pastikan session tetap utuh
+  if (!ctx.session.github) {
+    ctx.session.github = {};
+  }
+  
+  // Simpan nama repo
   ctx.session.github.repo = repoFullName;
+  
+  // Pastikan data ZIP masih tersimpan
+  if (!ctx.session.zipPath || !ctx.session.extractDir) {
+    ctx.deleteMessage();
+    return ctx.reply(
+      '❌ Data ZIP hilang. Silakan mulai proses dari awal dengan mengunggah file ZIP.',
+      Markup.inlineKeyboard([
+        Markup.button.callback('📤 Upload ZIP Baru', 'upload_zip_action')
+      ])
+    );
+  }
   
   ctx.deleteMessage();
   ctx.reply(
@@ -525,6 +554,10 @@ selectRepoScene.action('cancel', (ctx) => {
   return ctx.scene.leave();
 });
 
+// Session middleware with memory storage
+const LocalSession = require('telegraf-session-local');
+const localSession = new LocalSession({ database: 'session_db.json' });
+
 // Set up additional scenes
 const stageWithNewScenes = new Scenes.Stage([
   githubCredentialsScene, 
@@ -532,18 +565,39 @@ const stageWithNewScenes = new Scenes.Stage([
   selectRepoScene
 ]);
 
-bot.use(session({ 
-  defaultSession: () => ({}) 
-}));
+// Gunakan localSession untuk penyimpanan yang lebih persisten
+bot.use(localSession.middleware());
 bot.use(stageWithNewScenes.middleware());
 
 // Action handlers for repository options
 bot.action('create_new_repo', (ctx) => {
+  // Pastikan data ZIP masih tersimpan
+  if (!ctx.session || !ctx.session.zipPath || !ctx.session.extractDir) {
+    ctx.deleteMessage();
+    return ctx.reply(
+      '❌ Data ZIP hilang. Silakan mulai proses dari awal dengan mengunggah file ZIP.',
+      Markup.inlineKeyboard([
+        Markup.button.callback('📤 Upload ZIP Baru', 'upload_zip_action')
+      ])
+    );
+  }
+  
   ctx.deleteMessage();
   return ctx.scene.enter('create_repo');
 });
 
 bot.action('use_existing_repo', (ctx) => {
+  // Pastikan data ZIP masih tersimpan
+  if (!ctx.session || !ctx.session.zipPath || !ctx.session.extractDir) {
+    ctx.deleteMessage();
+    return ctx.reply(
+      '❌ Data ZIP hilang. Silakan mulai proses dari awal dengan mengunggah file ZIP.',
+      Markup.inlineKeyboard([
+        Markup.button.callback('📤 Upload ZIP Baru', 'upload_zip_action')
+      ])
+    );
+  }
+  
   ctx.deleteMessage();
   return ctx.scene.enter('select_repo');
 });
