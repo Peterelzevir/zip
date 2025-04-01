@@ -426,41 +426,104 @@ bot.on(message('text'), async (ctx) => {
   }
 });
 
-// Handle incoming files for replacement
+// Handle incoming files for replacement - fix to handle initial document upload vs replacement
 bot.on(message('document'), async (ctx) => {
   const userId = ctx.from.id.toString();
   const session = userSessions[userId];
   
-  // Skip if not waiting for file
-  if (!session || !session.waitingForFile) return;
+  // Check if we're in file replacement mode
+  if (session && session.waitingForFile) {
+    try {
+      const fileId = ctx.message.document.file_id;
+      const filePath = path.join(session.extractPath, session.selectedFile);
+      
+      // Status message
+      const statusMsg = await ctx.reply('⏳ Mengunduh file pengganti...');
+      
+      // Download file
+      const fileLink = await ctx.telegram.getFileLink(fileId);
+      const response = await fetch(fileLink);
+      const buffer = await response.arrayBuffer();
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      
+      session.waitingForFile = false;
+      
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        null,
+        `✅ File berhasil diganti: ${session.selectedFile}`
+      );
+      
+      await showFileList(ctx, userId);
+      
+    } catch (error) {
+      console.error('Error replacing file:', error);
+      ctx.reply('❌ Terjadi kesalahan saat mengganti file.');
+    }
+    return; // Important: return here to avoid processing this as a new ZIP
+  }
   
+  // If we get here, this is a new ZIP upload, not a replacement
   try {
     const fileId = ctx.message.document.file_id;
-    const filePath = path.join(session.extractPath, session.selectedFile);
+    const fileName = ctx.message.document.file_name;
+    
+    // Check if file is a ZIP
+    if (!fileName.toLowerCase().endsWith('.zip')) {
+      return ctx.reply('⚠️ Mohon kirim file dengan format ZIP.');
+    }
+    
+    // Create a new session
+    const sessionId = uuidv4();
+    const sessionDir = path.join(tempDir, sessionId);
+    fs.mkdirSync(sessionDir);
+    
+    const originalZipPath = path.join(sessionDir, fileName);
+    const extractPath = path.join(sessionDir, 'extracted');
+    fs.mkdirSync(extractPath);
     
     // Status message
-    const statusMsg = await ctx.reply('⏳ Mengunduh file pengganti...');
+    const statusMsg = await ctx.reply('⏳ Mengunduh file ZIP...');
     
     // Download file
     const fileLink = await ctx.telegram.getFileLink(fileId);
     const response = await fetch(fileLink);
     const buffer = await response.arrayBuffer();
-    fs.writeFileSync(filePath, Buffer.from(buffer));
+    fs.writeFileSync(originalZipPath, Buffer.from(buffer));
     
-    session.waitingForFile = false;
-    
+    // Extract ZIP
     await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      statusMsg.message_id,
-      null,
-      `✅ File berhasil diganti: ${session.selectedFile}`
+      ctx.chat.id, 
+      statusMsg.message_id, 
+      null, 
+      '⏳ Mengekstrak file ZIP...'
     );
     
-    await showFileList(ctx, userId);
+    const zip = new AdmZip(originalZipPath);
+    zip.extractAllTo(extractPath, true);
+    
+    // Get list of files
+    const fileList = getAllFiles(extractPath).map(file => 
+      path.relative(extractPath, file)
+    );
+    
+    // Save session data
+    userSessions[userId] = {
+      sessionId,
+      originalZipPath,
+      extractPath,
+      fileList,
+      originalFileName: fileName,
+      currentZipName: fileName
+    };
+    
+    // Show file list
+    await showFileList(ctx, userId, statusMsg.message_id);
     
   } catch (error) {
-    console.error('Error replacing file:', error);
-    ctx.reply('❌ Terjadi kesalahan saat mengganti file.');
+    console.error('Error handling ZIP file:', error);
+    ctx.reply('❌ Terjadi kesalahan saat memproses file ZIP.');
   }
 });
 
