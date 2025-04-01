@@ -17,6 +17,9 @@ const bot = new Telegraf(BOT_TOKEN);
 const ADMIN_IDS = [5988451717]; // Replace with your admin Telegram ID
 const tempDir = path.join(os.tmpdir(), 'telegram-zip-github-bot');
 
+// Set timeout for operations to 1 hour (3600000 ms)
+const OPERATION_TIMEOUT = 3600000;
+
 // Create temp directory if it doesn't exist
 try {
   if (!fs.existsSync(tempDir)) {
@@ -34,7 +37,15 @@ const isAdmin = (ctx, next) => {
   return ctx.reply('⛔ Maaf, hanya admin yang dapat menggunakan bot ini.');
 };
 
-// Setup persistent session storage
+// Apply admin check to all messages
+bot.use((ctx, next) => {
+  if (ctx.message && !ADMIN_IDS.includes(ctx.from.id)) {
+    return ctx.reply('⛔ Bot ini hanya dapat digunakan oleh admin.');
+  }
+  return next();
+});
+
+// Setup persistent session storage with extended TTL
 const localSession = new LocalSession({
   database: 'session_db.json',
   property: 'session',
@@ -43,7 +54,8 @@ const localSession = new LocalSession({
     serialize: (obj) => JSON.stringify(obj),
     deserialize: (str) => JSON.parse(str),
   },
-  state: { zipPath: null, extractDir: null, github: null, fileName: null }
+  state: { zipPath: null, extractDir: null, github: null, fileName: null },
+  ttl: OPERATION_TIMEOUT // Set session TTL to 1 hour
 });
 
 // Setup scenes for workflow
@@ -457,10 +469,15 @@ bot.action('cancel_upload', (ctx) => {
   return ctx.reply('❌ Unggahan dibatalkan.');
 });
 
-// Handle ZIP file upload
+// Handle ZIP file upload - restricted to admin only
 bot.on('document', isAdmin, async (ctx) => {
   const fileId = ctx.message.document.file_id;
   const fileName = ctx.message.document.file_name;
+  
+  // Double check if user is admin
+  if (!ADMIN_IDS.includes(ctx.from.id)) {
+    return ctx.reply('⛔ Anda tidak memiliki izin untuk menggunakan bot ini.');
+  }
   
   // Check if file is a ZIP
   if (!fileName.endsWith('.zip')) {
@@ -470,15 +487,19 @@ bot.on('document', isAdmin, async (ctx) => {
   const statusMsg = await ctx.reply('🔄 Mengunduh file ZIP...');
   
   try {
+    // Set longer timeout for large file downloads
+    const downloadTimeout = OPERATION_TIMEOUT;
+    
     // Download file
     const fileLink = await ctx.telegram.getFileLink(fileId);
     const zipPath = path.join(tempDir, fileName);
     
-    // Download file using axios
+    // Download file using axios with extended timeout
     const response = await axios({
       method: 'GET',
       url: fileLink.toString(),
-      responseType: 'stream'
+      responseType: 'stream',
+      timeout: downloadTimeout
     });
     
     // Create a writable stream
@@ -640,6 +661,9 @@ bot.action('process_zip', async (ctx) => {
   if (!ctx.session || !ctx.session.extractDir || !ctx.session.github) {
     return ctx.reply('❌ Data tidak lengkap. Silakan mulai dari awal.');
   }
+  
+  // Set operation timeout to 1 hour
+  ctx.telegram.options.webhookReply = false;
   
   const extractDir = ctx.session.extractDir;
   const { username, token, repo } = ctx.session.github;
@@ -874,9 +898,19 @@ bot.catch((err, ctx) => {
   return ctx.reply(`❌ Terjadi kesalahan: ${err.message}`);
 });
 
-// Start the bot
-bot.launch().then(() => {
-  console.log('Bot telah dijalankan!');
+// Start the bot with improved settings
+const botOptions = {
+  telegram: {
+    // Set longer timeout for API calls
+    apiRoot: 'https://api.telegram.org',
+    webhookReply: false,
+    timeoutMs: OPERATION_TIMEOUT
+  }
+};
+
+bot.launch(botOptions).then(() => {
+  console.log('Bot telah dijalankan dengan timeout 1 jam!');
+  console.log(`Admin IDs: ${ADMIN_IDS.join(', ')}`);
 }).catch(err => {
   console.error('Error starting bot:', err);
 });
