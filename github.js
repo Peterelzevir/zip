@@ -38,7 +38,7 @@ const { BaseScene } = Scenes;
 const githubCredentialsScene = new BaseScene('github_credentials');
 githubCredentialsScene.enter((ctx) => {
   return ctx.reply(
-    '🔐 Masukkan kredensial GitHub Anda dalam format berikut:\n\nUsername: your_username\nToken: your_personal_access_token\nRepo: owner/repository',
+    '🔐 Masukkan kredensial GitHub Anda dalam format berikut:\n\nUsername: your_username\nToken: your_personal_access_token',
     Markup.inlineKeyboard([
       Markup.button.callback('❌ Batal', 'cancel')
     ])
@@ -50,9 +50,9 @@ githubCredentialsScene.on('text', async (ctx) => {
   const lines = text.split('\n');
   
   // Check if format is correct
-  if (lines.length < 3) {
+  if (lines.length < 2) {
     return ctx.reply(
-      '❌ Format tidak valid. Gunakan format:\n\nUsername: your_username\nToken: your_personal_access_token\nRepo: owner/repository',
+      '❌ Format tidak valid. Gunakan format:\n\nUsername: your_username\nToken: your_personal_access_token',
       Markup.inlineKeyboard([
         Markup.button.callback('❌ Batal', 'cancel')
       ])
@@ -62,9 +62,8 @@ githubCredentialsScene.on('text', async (ctx) => {
   // Parse credentials
   const username = lines[0].split('Username:')[1]?.trim();
   const token = lines[1].split('Token:')[1]?.trim();
-  const repo = lines[2].split('Repo:')[1]?.trim();
   
-  if (!username || !token || !repo) {
+  if (!username || !token) {
     return ctx.reply(
       '❌ Format tidak valid. Pastikan semua informasi terisi.',
       Markup.inlineKeyboard([
@@ -74,7 +73,7 @@ githubCredentialsScene.on('text', async (ctx) => {
   }
   
   // Store credentials in context session
-  ctx.session.github = { username, token, repo };
+  ctx.session.github = { username, token };
   
   // Reply with confirmation
   const statusMsg = await ctx.reply('🔄 Memverifikasi kredensial GitHub...');
@@ -85,11 +84,9 @@ githubCredentialsScene.on('text', async (ctx) => {
       auth: token
     });
     
-    const [owner, repo_name] = repo.split('/');
-    
-    await octokit.repos.get({
-      owner,
-      repo: repo_name
+    // Verify by listing user's repositories
+    await octokit.repos.listForAuthenticatedUser({
+      per_page: 1
     });
     
     await ctx.telegram.editMessageText(
@@ -98,7 +95,8 @@ githubCredentialsScene.on('text', async (ctx) => {
       undefined,
       '✅ Kredensial GitHub terverifikasi!',
       Markup.inlineKeyboard([
-        Markup.button.callback('▶️ Lanjutkan', 'process_zip')
+        Markup.button.callback('➕ Buat Repository Baru', 'create_new_repo'),
+        Markup.button.callback('🔍 Gunakan Repository Yang Ada', 'use_existing_repo')
       ])
     );
     
@@ -129,12 +127,7 @@ githubCredentialsScene.action('cancel', (ctx) => {
   return ctx.scene.leave();
 });
 
-// Set up scene management
-const stage = new Scenes.Stage([githubCredentialsScene]);
-bot.use(session({ 
-  defaultSession: () => ({}) // Tetapkan session default kosong
-}));
-bot.use(stage.middleware());
+// Catatan: Konfigurasi scene management sudah dipindahkan ke bawah
 
 // Start command
 bot.start((ctx) => {
@@ -360,6 +353,199 @@ bot.action('retry_extract', (ctx) => {
 // GitHub authorization action
 bot.action('github_auth', (ctx) => {
   return ctx.scene.enter('github_credentials');
+});
+
+// Scene for creating a new repository
+const createRepoScene = new BaseScene('create_repo');
+createRepoScene.enter((ctx) => {
+  return ctx.reply(
+    '➕ Masukkan nama repository baru yang ingin dibuat:',
+    Markup.inlineKeyboard([
+      Markup.button.callback('❌ Batal', 'cancel')
+    ])
+  );
+});
+
+createRepoScene.on('text', async (ctx) => {
+  const repoName = ctx.message.text.trim();
+  
+  // Validate repository name
+  if (!/^[a-zA-Z0-9_.-]+$/.test(repoName)) {
+    return ctx.reply(
+      '❌ Nama repository tidak valid. Gunakan hanya huruf, angka, garis bawah, titik, dan tanda hubung.',
+      Markup.inlineKeyboard([
+        Markup.button.callback('🔄 Coba Lagi', 'retry_repo_name'),
+        Markup.button.callback('❌ Batal', 'cancel')
+      ])
+    );
+  }
+  
+  const statusMsg = await ctx.reply('🔄 Membuat repository baru...');
+  
+  try {
+    const { token } = ctx.session.github;
+    
+    const octokit = new Octokit({
+      auth: token
+    });
+    
+    // Create new repository
+    const result = await octokit.repos.createForAuthenticatedUser({
+      name: repoName,
+      private: true,
+      auto_init: true
+    });
+    
+    const repoFullName = result.data.full_name;
+    
+    ctx.session.github.repo = repoFullName;
+    
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      `✅ Repository baru berhasil dibuat: ${repoFullName}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('▶️ Lanjutkan Push Ke GitHub', 'process_zip')
+      ])
+    );
+    
+    return ctx.scene.leave();
+  } catch (error) {
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      `❌ Gagal membuat repository: ${error.message}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('🔄 Coba Lagi', 'retry_repo_name'),
+        Markup.button.callback('❌ Batal', 'cancel')
+      ])
+    );
+  }
+});
+
+createRepoScene.action('retry_repo_name', (ctx) => {
+  ctx.deleteMessage();
+  ctx.scene.reenter();
+});
+
+createRepoScene.action('cancel', (ctx) => {
+  ctx.deleteMessage();
+  ctx.reply('❌ Pembuatan repository dibatalkan.');
+  return ctx.scene.leave();
+});
+
+// Scene for selecting existing repository
+const selectRepoScene = new BaseScene('select_repo');
+selectRepoScene.enter(async (ctx) => {
+  const statusMsg = await ctx.reply('🔄 Mengambil daftar repository...');
+  
+  try {
+    const { token } = ctx.session.github;
+    
+    const octokit = new Octokit({
+      auth: token
+    });
+    
+    // Get the first 10 repositories
+    const result = await octokit.repos.listForAuthenticatedUser({
+      per_page: 10,
+      sort: 'updated',
+      direction: 'desc'
+    });
+    
+    const repos = result.data;
+    
+    if (repos.length === 0) {
+      await ctx.telegram.editMessageText(
+        statusMsg.chat.id,
+        statusMsg.message_id,
+        undefined,
+        '❌ Tidak ada repository yang ditemukan.',
+        Markup.inlineKeyboard([
+          Markup.button.callback('➕ Buat Repository Baru', 'create_new_repo'),
+          Markup.button.callback('❌ Batal', 'cancel')
+        ])
+      );
+      return;
+    }
+    
+    // Create keyboard with repository buttons
+    const keyboard = repos.map(repo => [
+      Markup.button.callback(repo.full_name, `select_repo:${repo.full_name}`)
+    ]);
+    
+    // Add navigation buttons
+    keyboard.push([
+      Markup.button.callback('➕ Buat Repository Baru', 'create_new_repo'),
+      Markup.button.callback('❌ Batal', 'cancel')
+    ]);
+    
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      '🔍 Pilih repository yang ingin digunakan:',
+      Markup.inlineKeyboard(keyboard)
+    );
+    
+  } catch (error) {
+    await ctx.telegram.editMessageText(
+      statusMsg.chat.id,
+      statusMsg.message_id,
+      undefined,
+      `❌ Gagal mengambil daftar repository: ${error.message}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('🔄 Coba Lagi', 'use_existing_repo'),
+        Markup.button.callback('❌ Batal', 'cancel')
+      ])
+    );
+  }
+});
+
+selectRepoScene.action(/select_repo:(.+)/, (ctx) => {
+  const repoFullName = ctx.match[1];
+  ctx.session.github.repo = repoFullName;
+  
+  ctx.deleteMessage();
+  ctx.reply(
+    `✅ Repository terpilih: ${repoFullName}`,
+    Markup.inlineKeyboard([
+      Markup.button.callback('▶️ Lanjutkan Push Ke GitHub', 'process_zip')
+    ])
+  );
+  
+  return ctx.scene.leave();
+});
+
+selectRepoScene.action('cancel', (ctx) => {
+  ctx.deleteMessage();
+  ctx.reply('❌ Pemilihan repository dibatalkan.');
+  return ctx.scene.leave();
+});
+
+// Set up additional scenes
+const stageWithNewScenes = new Scenes.Stage([
+  githubCredentialsScene, 
+  createRepoScene, 
+  selectRepoScene
+]);
+
+bot.use(session({ 
+  defaultSession: () => ({}) 
+}));
+bot.use(stageWithNewScenes.middleware());
+
+// Action handlers for repository options
+bot.action('create_new_repo', (ctx) => {
+  ctx.deleteMessage();
+  return ctx.scene.enter('create_repo');
+});
+
+bot.action('use_existing_repo', (ctx) => {
+  ctx.deleteMessage();
+  return ctx.scene.enter('select_repo');
 });
 
 // Process ZIP and push to GitHub action
