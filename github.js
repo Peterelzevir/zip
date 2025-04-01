@@ -4,6 +4,7 @@ const { Octokit } = require('@octokit/rest');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const axios = require('axios');
 // Bot configuration - Masukkan token bot Telegram dari BotFather di sini
 const BOT_TOKEN = '7332933814:AAGm2mbyQM6UyMQGggJyXbRsAgESv5c1uk8';
 const bot = new Telegraf(BOT_TOKEN);
@@ -14,8 +15,12 @@ const ADMIN_IDS = [5988451717]; // Ganti dengan ID Telegram admin
 const tempDir = path.join(os.tmpdir(), 'telegram-zip-github-bot');
 
 // Create temp directory if it doesn't exist
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
+try {
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+} catch (error) {
+  console.error('Error creating temp directory:', error);
 }
 
 // Middleware to check if user is admin
@@ -126,7 +131,9 @@ githubCredentialsScene.action('cancel', (ctx) => {
 
 // Set up scene management
 const stage = new Scenes.Stage([githubCredentialsScene]);
-bot.use(session());
+bot.use(session({ 
+  defaultSession: () => ({}) // Tetapkan session default kosong
+}));
 bot.use(stage.middleware());
 
 // Start command
@@ -236,13 +243,19 @@ bot.on('document', isAdmin, async (ctx) => {
     const fileLink = await ctx.telegram.getFileLink(fileId);
     const zipPath = path.join(tempDir, fileName);
     
+    // Download file using axios
+    const response = await axios({
+      method: 'GET',
+      url: fileLink.toString(),
+      responseType: 'stream'
+    });
+    
     // Create a writable stream
     const fileStream = fs.createWriteStream(zipPath);
     
-    // Fetch the file and pipe it to the writable stream
-    const response = await fetch(fileLink);
+    // Pipe the response data to the file
     const downloadPromise = new Promise((resolve, reject) => {
-      response.body.pipe(fileStream);
+      response.data.pipe(fileStream);
       fileStream.on('finish', resolve);
       fileStream.on('error', reject);
     });
