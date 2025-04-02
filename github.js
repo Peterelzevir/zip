@@ -75,7 +75,7 @@ try {
 
 // Middleware to check if user is admin or authorized
 const isAuthorized = (ctx, next) => {
-  if (ADMIN_IDS.includes(ctx.from.id) || AUTHORIZED_USERS.includes(ctx.from.id)) {
+  if (ADMIN_IDS.includes(ctx.from?.id) || AUTHORIZED_USERS.includes(ctx.from?.id)) {
     return next();
   }
   return ctx.reply('⛔ Maaf, Anda tidak memiliki akses untuk menggunakan bot ini.');
@@ -83,7 +83,7 @@ const isAuthorized = (ctx, next) => {
 
 // Middleware to check if user is admin
 const isAdmin = (ctx, next) => {
-  if (ADMIN_IDS.includes(ctx.from.id)) {
+  if (ADMIN_IDS.includes(ctx.from?.id)) {
     return next();
   }
   return ctx.reply('⛔ Maaf, hanya admin yang dapat menggunakan fitur ini.');
@@ -91,7 +91,12 @@ const isAdmin = (ctx, next) => {
 
 // Apply authorization check to all messages
 bot.use((ctx, next) => {
-  if (ctx.message && !ADMIN_IDS.includes(ctx.from.id) && !AUTHORIZED_USERS.includes(ctx.from.id)) {
+  // Skip middleware for callback queries - they'll be checked in their handlers
+  if (ctx.callbackQuery) {
+    return next();
+  }
+  
+  if (ctx.message && !ADMIN_IDS.includes(ctx.from?.id) && !AUTHORIZED_USERS.includes(ctx.from?.id)) {
     return ctx.reply('⛔ Anda tidak memiliki akses untuk menggunakan bot ini.');
   }
   return next();
@@ -801,10 +806,25 @@ const stage = new Scenes.Stage([
   removeUserScene
 ]);
 
-// Use session middleware and stage middleware
+// Use session and error handling middleware
 bot.use(localSession.middleware());
 bot.use(usersStorage.middleware());
 bot.use(stage.middleware());
+
+// Global error handler middleware
+bot.use(async (ctx, next) => {
+  try {
+    await next();
+  } catch (error) {
+    console.error('Bot error caught in middleware:', error);
+    // Try to notify user about error
+    try {
+      await ctx.reply('❌ Terjadi kesalahan pada bot. Silakan coba lagi dengan /start');
+    } catch (replyError) {
+      console.error('Failed to send error message to user:', replyError);
+    }
+  }
+});
 
 // Start command
 bot.start((ctx) => {
@@ -833,6 +853,13 @@ bot.start((ctx) => {
     '🔑 Untuk memulai, gunakan perintah /upload_zip atau klik tombol di bawah.',
     Markup.inlineKeyboard(keyboard)
   );
+});
+
+// Register callback handlers for all buttons explicitly
+bot.action(/.*/, (ctx, next) => {
+  // Log all callbacks for debugging
+  console.log(`Received callback: ${ctx.callbackQuery.data}`);
+  return next();
 });
 
 // Help command
@@ -979,100 +1006,88 @@ bot.action('delete_repository', isAuthorized, (ctx) => {
 });
 
 // Tutorial action
-bot.action('tutorial', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.deleteMessage();
-  return ctx.reply(
-    '📚 Tutorial Penggunaan Bot:\n\n' +
-    '1️⃣ Gunakan perintah /upload_zip atau klik tombol "Upload ZIP"\n' +
-    '2️⃣ Unggah file ZIP yang ingin diproses\n' +
-    '3️⃣ Masukkan kredensial GitHub Anda\n' +
-    '4️⃣ Pilih repository yang ada atau buat repository baru\n' +
-    '5️⃣ Bot akan mengekstrak file ZIP dan mengunggahnya ke GitHub\n' +
-    '6️⃣ Anda dapat mengelola repository seperti mengubah visibilitas atau menghapusnya\n\n' +
-    '🔑 Catatan:\n' +
-    '- Anda memerlukan Personal Access Token GitHub dengan akses repo\n' +
-    '- Admin dapat mengelola pengguna yang diizinkan menggunakan bot',
-    Markup.inlineKeyboard([
-      Markup.button.callback('◀️ Kembali', 'back_to_main')
-    ])
-  );
+bot.action('tutorial', async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage().catch(e => console.log('Error deleting message:', e));
+    return ctx.reply(
+      '📚 Tutorial Penggunaan Bot:\n\n' +
+      '1️⃣ Gunakan perintah /upload_zip atau klik tombol "Upload ZIP"\n' +
+      '2️⃣ Unggah file ZIP yang ingin diproses\n' +
+      '3️⃣ Masukkan kredensial GitHub Anda\n' +
+      '4️⃣ Pilih repository yang ada atau buat repository baru\n' +
+      '5️⃣ Bot akan mengekstrak file ZIP dan mengunggahnya ke GitHub\n' +
+      '6️⃣ Anda dapat mengelola repository seperti mengubah visibilitas atau menghapusnya\n\n' +
+      '🔑 Catatan:\n' +
+      '- Anda memerlukan Personal Access Token GitHub dengan akses repo\n' +
+      '- Admin dapat mengelola pengguna yang diizinkan menggunakan bot',
+      Markup.inlineKeyboard([
+        Markup.button.callback('◀️ Kembali', 'back_to_main')
+      ])
+    );
+  } catch (error) {
+    console.error('Error in tutorial action:', error);
+    return ctx.reply('❌ Terjadi kesalahan. Silakan coba lagi dengan /start');
+  }
 });
 
 // About action
-bot.action('about', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.deleteMessage();
-  return ctx.reply(
-    'ℹ️ Tentang Bot:\n\n' +
-    '🤖 Bot Telegram untuk ekstrak ZIP dan push ke GitHub\n' +
-    '🔒 Fitur admin untuk mengontrol akses pengguna\n' +
-    '🔄 Dukungan file ZIP besar\n' +
-    '📊 Pembaruan progres secara real-time\n' +
-    '📁 Pengelolaan repository (publik/privat)\n' +
-    '👥 Manajemen pengguna yang berwenang\n\n' +
-    '⚙️ Dibuat dengan Node.js, Telegraf, AdmZip, dan Octokit',
-    Markup.inlineKeyboard([
-      Markup.button.callback('◀️ Kembali', 'back_to_main')
-    ])
-  );
+bot.action('about', async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage().catch(e => console.log('Error deleting message:', e));
+    return ctx.reply(
+      'ℹ️ Tentang Bot:\n\n' +
+      '🤖 Bot Telegram untuk ekstrak ZIP dan push ke GitHub\n' +
+      '🔒 Fitur admin untuk mengontrol akses pengguna\n' +
+      '🔄 Dukungan file ZIP besar\n' +
+      '📊 Pembaruan progres secara real-time\n' +
+      '📁 Pengelolaan repository (publik/privat)\n' +
+      '👥 Manajemen pengguna yang berwenang\n\n' +
+      '⚙️ Dibuat dengan Node.js, Telegraf, AdmZip, dan Octokit',
+      Markup.inlineKeyboard([
+        Markup.button.callback('◀️ Kembali', 'back_to_main')
+      ])
+    );
+  } catch (error) {
+    console.error('Error in about action:', error);
+    return ctx.reply('❌ Terjadi kesalahan. Silakan coba lagi dengan /start');
+  }
 });
 
 // Back to main action
-bot.action('back_to_main', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.deleteMessage();
-  
-  const isUserAdmin = ADMIN_IDS.includes(ctx.from.id);
-  
-  let keyboard = [
-    [Markup.button.callback('📤 Upload ZIP', 'upload_zip_action')]
-  ];
-  
-  // Add admin-only buttons
-  if (isUserAdmin) {
+bot.action('back_to_main', async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage().catch(e => console.log('Error deleting message:', e));
+    
+    const isUserAdmin = ADMIN_IDS.includes(ctx.from.id);
+    
+    let keyboard = [
+      [Markup.button.callback('📤 Upload ZIP', 'upload_zip_action')]
+    ];
+    
+    // Add admin-only buttons
+    if (isUserAdmin) {
+      keyboard.push([
+        Markup.button.callback('👥 Kelola Pengguna', 'manage_users'),
+        Markup.button.callback('🗑️ Hapus Repository', 'delete_repository')
+      ]);
+    }
+    
     keyboard.push([
-      Markup.button.callback('👥 Kelola Pengguna', 'manage_users'),
-      Markup.button.callback('🗑️ Hapus Repository', 'delete_repository')
+      Markup.button.callback('📚 Tutorial', 'tutorial'),
+      Markup.button.callback('ℹ️ Tentang Bot', 'about')
     ]);
+    
+    return ctx.reply(
+      `👋 Halo ${ctx.from.first_name}!\n\n` +
+      '🤖 Saya adalah bot yang dapat membantu Anda mengekstrak file ZIP dan mengunggahnya ke GitHub.\n\n' +
+      '🔑 Untuk memulai, gunakan perintah /upload_zip atau klik tombol di bawah.',
+      Markup.inlineKeyboard(keyboard)
+    );
+  } catch (error) {
+    console.error('Error in back_to_main:', error);
+    return ctx.reply('❌ Terjadi kesalahan. Silakan coba lagi dengan /start');
   }
-  
-  keyboard.push([
-    Markup.button.callback('📚 Tutorial', 'tutorial'),
-    Markup.button.callback('ℹ️ Tentang Bot', 'about')
-  ]);
-  
-  return ctx.reply(
-    `👋 Halo ${ctx.from.first_name}!\n\n` +
-    '🤖 Saya adalah bot yang dapat membantu Anda mengekstrak file ZIP dan mengunggahnya ke GitHub.\n\n' +
-    '🔑 Untuk memulai, gunakan perintah /upload_zip atau klik tombol di bawah.',
-    Markup.inlineKeyboard(keyboard)
-  );
 });
-
-// Handle errors
-bot.catch((err, ctx) => {
-  console.error('Bot error:', err);
-  return ctx.reply(`❌ Terjadi kesalahan: ${err.message}`);
-});
-
-// Start the bot with improved settings
-const botOptions = {
-  telegram: {
-    // Set longer timeout for API calls
-    apiRoot: 'https://api.telegram.org',
-    webhookReply: false,
-    timeoutMs: OPERATION_TIMEOUT
-  }
-};
-
-bot.launch(botOptions).then(() => {
-  console.log('Bot telah dijalankan dengan timeout 1 jam!');
-  console.log(`Admin IDs: ${ADMIN_IDS.join(', ')}`);
-}).catch(err => {
-  console.error('Error starting bot:', err);
-});
-
-// Enable graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
