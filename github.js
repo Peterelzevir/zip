@@ -1091,3 +1091,30 @@ bot.action('back_to_main', async (ctx) => {
     return ctx.reply('❌ Terjadi kesalahan. Silakan coba lagi dengan /start');
   }
 });
+
+// Handle errors
+bot.catch((err, ctx) => {
+  console.error('Bot error:', err);
+  return ctx.reply(`❌ Terjadi kesalahan: ${err.message}`);
+});
+
+// Start the bot with improved settings
+const botOptions = {
+  telegram: {
+    // Set longer timeout for API calls
+    apiRoot: 'https://api.telegram.org',
+    webhookReply: false,
+    timeoutMs: OPERATION_TIMEOUT
+  }
+};
+
+bot.launch(botOptions).then(() => {
+  console.log('Bot telah dijalankan dengan timeout 1 jam!');
+  console.log(`Admin IDs: ${ADMIN_IDS.join(', ')}`);
+}).catch(err => {
+  console.error('Error starting bot:', err);
+});
+
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
