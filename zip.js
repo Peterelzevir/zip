@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 const { v4: uuidv4 } = require('uuid');
+const mime = require('mime-types');
 
 // Bot configuration
 const token = '7531971451:AAHcOd1gH0Nog2MRt7bPtE0NzR_ZUtvKiFc';
@@ -47,8 +48,9 @@ bot.action('help', (ctx) => {
     '1. Kirim file ZIP yang ingin diedit\n' +
     '2. Pilih file yang ingin dimodifikasi menggunakan tombol\n' +
     '3. Kirim file baru untuk mengganti file yang dipilih\n' +
-    '4. Pilih untuk menyimpan perubahan atau melanjutkan pengeditan\n' +
-    '5. Bot akan mengirimkan kembali file ZIP yang sudah dimodifikasi\n\n' +
+    '4. Anda juga dapat menambah file baru, menghapus file, atau melihat isi file\n' +
+    '5. Pilih untuk menyimpan perubahan atau melanjutkan pengeditan\n' +
+    '6. Bot akan mengirimkan kembali file ZIP yang sudah dimodifikasi\n\n' +
     'Perintah: /start - Memulai bot\n' +
     'Perintah: /cancel - Membatalkan sesi pengeditan',
     { parse_mode: 'Markdown' }
@@ -75,8 +77,6 @@ bot.command('cancel', (ctx) => {
     ctx.reply('⚠️ Tidak ada sesi aktif.');
   }
 });
-
-// MENGHAPUS INI - Handler awal sudah dipindah ke handler gabungan di bawah
 
 // Show file list with pagination
 async function showFileList(ctx, userId, messageId = null, page = 0) {
@@ -116,6 +116,9 @@ async function showFileList(ctx, userId, messageId = null, page = 0) {
   // Add extra options
   fileButtons.push([
     { text: '📝 Ubah Nama ZIP', callback_data: 'rename' },
+    { text: '➕ Tambah File', callback_data: 'add_file' }
+  ]);
+  fileButtons.push([
     { text: '✅ Selesai', callback_data: 'finish' }
   ]);
   
@@ -165,8 +168,10 @@ bot.action(/file:(.+)/, async (ctx) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
+          [{ text: '👁️ Preview File', callback_data: 'preview' }],
           [{ text: '📤 Ganti dengan file baru', callback_data: 'replace' }],
           [{ text: '✏️ Edit isi teks', callback_data: 'edit' }],
+          [{ text: '🗑️ Hapus File', callback_data: 'delete' }],
           [{ text: '🔙 Kembali ke daftar file', callback_data: 'back' }]
         ]
       }
@@ -193,6 +198,97 @@ bot.action('replace', async (ctx) => {
   
   await ctx.editMessageText(
     `📤 *Ganti File*\n\nKirim file baru (format apapun) untuk mengganti:\n\`${session.selectedFile}\`\n\nAtau klik batal untuk kembali.`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔙 Batal', callback_data: 'back' }]
+        ]
+      }
+    }
+  );
+  
+  ctx.answerCbQuery();
+});
+
+// Handle delete action
+bot.action('delete', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const session = userSessions[userId];
+  if (!session) return ctx.answerCbQuery('⚠️ Sesi tidak ditemukan');
+  
+  await ctx.editMessageText(
+    `🗑️ *Hapus File*\n\nAnda yakin ingin menghapus file:\n\`${session.selectedFile}\`?`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Ya, Hapus', callback_data: 'confirm_delete' },
+            { text: '❌ Tidak', callback_data: 'back' }
+          ]
+        ]
+      }
+    }
+  );
+  
+  ctx.answerCbQuery();
+});
+
+// Handle confirm delete action
+bot.action('confirm_delete', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const session = userSessions[userId];
+  if (!session) return ctx.answerCbQuery('⚠️ Sesi tidak ditemukan');
+  
+  const filePath = path.join(session.extractPath, session.selectedFile);
+  
+  try {
+    // Delete the file
+    fs.unlinkSync(filePath);
+    
+    // Update file list
+    session.fileList = session.fileList.filter(file => file !== session.selectedFile);
+    
+    await ctx.editMessageText(
+      `✅ File berhasil dihapus: \`${session.selectedFile}\``,
+      {
+        parse_mode: 'Markdown'
+      }
+    );
+    
+    // Show file list after a short delay
+    setTimeout(() => {
+      showFileList(ctx, userId);
+    }, 1000);
+    
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    await ctx.editMessageText(
+      `❌ Terjadi kesalahan saat menghapus file: ${error.message}`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Kembali', callback_data: 'back' }]
+          ]
+        }
+      }
+    );
+  }
+  
+  ctx.answerCbQuery();
+});
+
+// Handle add file action
+bot.action('add_file', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const session = userSessions[userId];
+  if (!session) return ctx.answerCbQuery('⚠️ Sesi tidak ditemukan');
+  
+  session.addingNewFile = true;
+  
+  await ctx.editMessageText(
+    `➕ *Tambah File Baru*\n\nKirim file baru yang ingin ditambahkan ke dalam ZIP.\nAtau kirim pesan dalam format:\n\n/path nama_file.ext\n\nUntuk menambahkan file ke dalam folder.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -240,6 +336,111 @@ bot.action('edit', async (ctx) => {
   } catch (error) {
     await ctx.editMessageText(
       `⚠️ File tidak dapat diedit sebagai teks. Silahkan pilih opsi lain.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Kembali', callback_data: 'back' }]
+          ]
+        }
+      }
+    );
+  }
+  
+  ctx.answerCbQuery();
+});
+
+// Handle preview action
+bot.action('preview', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const session = userSessions[userId];
+  if (!session) return ctx.answerCbQuery('⚠️ Sesi tidak ditemukan');
+  
+  const filePath = path.join(session.extractPath, session.selectedFile);
+  
+  try {
+    // Get file stats
+    const stats = fs.statSync(filePath);
+    const fileSize = (stats.size / 1024).toFixed(2) + ' KB';
+    
+    // Determine file type
+    const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+    const fileType = mimeType.split('/')[0];
+    
+    await ctx.editMessageText(
+      `🔍 *Preview File*: \`${session.selectedFile}\`\n\nTipe: ${mimeType}\nUkuran: ${fileSize}\n\nSedang memproses preview...`,
+      {
+        parse_mode: 'Markdown'
+      }
+    );
+    
+    // Handle different file types
+    if (fileType === 'image') {
+      // Preview image
+      await ctx.replyWithPhoto({ source: filePath }, {
+        caption: `📷 Preview: ${session.selectedFile}`
+      });
+    } else if (fileType === 'video') {
+      // Preview video
+      await ctx.replyWithVideo({ source: filePath }, {
+        caption: `🎬 Preview: ${session.selectedFile}`
+      });
+    } else if (fileType === 'audio') {
+      // Preview audio
+      await ctx.replyWithAudio({ source: filePath }, {
+        caption: `🎵 Preview: ${session.selectedFile}`
+      });
+    } else if (isTextFile(filePath, mimeType)) {
+      // Preview text/code
+      const fileContent = fs.readFileSync(filePath, 'utf8');
+      
+      // Truncate content if too large
+      let previewContent = fileContent;
+      let truncated = false;
+      
+      if (fileContent.length > 4000) {
+        previewContent = fileContent.substring(0, 4000);
+        truncated = true;
+      }
+      
+      // Format code for display
+      const formattedCode = `\`\`\`\n${previewContent}\n\`\`\``;
+      
+      await ctx.reply(
+        `📝 *Source Code*: \`${session.selectedFile}\`\n\n${formattedCode}${truncated ? '\n\n_[Isi file terlalu panjang, hanya menampilkan 4000 karakter pertama]_' : ''}`,
+        {
+          parse_mode: 'Markdown'
+        }
+      );
+    } else {
+      // For other file types, just show info
+      await ctx.reply(
+        `📄 *File Info*: \`${session.selectedFile}\`\n\nTipe: ${mimeType}\nUkuran: ${fileSize}\n\nFile tipe ini tidak dapat di-preview.`,
+        {
+          parse_mode: 'Markdown'
+        }
+      );
+    }
+    
+    // Return to file options after preview
+    await ctx.reply(
+      `🔍 *File*: \`${session.selectedFile}\`\n\nSilahkan pilih aksi selanjutnya:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📤 Ganti dengan file baru', callback_data: 'replace' }],
+            [{ text: '✏️ Edit isi teks', callback_data: 'edit' }],
+            [{ text: '🗑️ Hapus File', callback_data: 'delete' }],
+            [{ text: '🔙 Kembali ke daftar file', callback_data: 'back' }]
+          ]
+        }
+      }
+    );
+    
+  } catch (error) {
+    console.error('Error previewing file:', error);
+    await ctx.editMessageText(
+      `❌ Terjadi kesalahan saat preview file: ${error.message}`,
       {
         reply_markup: {
           inline_keyboard: [
@@ -321,7 +522,7 @@ bot.action('finish', async (ctx) => {
   }
 });
 
-// Handle incoming text for rename or edit
+// Handle incoming text for rename, edit, or path
 bot.on(message('text'), async (ctx) => {
   const userId = ctx.from.id.toString();
   const session = userSessions[userId];
@@ -361,12 +562,113 @@ bot.on(message('text'), async (ctx) => {
     
     return;
   }
+  
+  // Handle custom path for adding new file
+  if (session.addingNewFile && text.startsWith('/path ')) {
+    session.waitingForFileWithPath = text.substring(6);
+    
+    await ctx.reply(
+      `📂 *Custom Path*\n\nFile akan disimpan sebagai: \`${session.waitingForFileWithPath}\`\n\nKirim file yang ingin ditambahkan ke path ini.`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Batal', callback_data: 'back' }]
+          ]
+        }
+      }
+    );
+    
+    return;
+  }
 });
 
-// Handle incoming files for replacement - fix to handle initial document upload vs replacement
+// Handle incoming files for replacement or adding
 bot.on(message('document'), async (ctx) => {
   const userId = ctx.from.id.toString();
   const session = userSessions[userId];
+  
+  // Check if we're adding a new file with custom path
+  if (session && session.waitingForFileWithPath) {
+    try {
+      const fileId = ctx.message.document.file_id;
+      const customPath = session.waitingForFileWithPath;
+      
+      // Create directories if needed
+      const dirPath = path.dirname(path.join(session.extractPath, customPath));
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
+      
+      const filePath = path.join(session.extractPath, customPath);
+      
+      // Status message
+      const statusMsg = await ctx.reply('⏳ Mengunduh file...');
+      
+      // Download file
+      const fileLink = await ctx.telegram.getFileLink(fileId);
+      const response = await fetch(fileLink);
+      const buffer = await response.arrayBuffer();
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      
+      // Update file list
+      session.fileList.push(customPath);
+      delete session.waitingForFileWithPath;
+      session.addingNewFile = false;
+      
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        null,
+        `✅ File berhasil ditambahkan: ${customPath}`
+      );
+      
+      await showFileList(ctx, userId);
+      
+    } catch (error) {
+      console.error('Error adding file with custom path:', error);
+      ctx.reply('❌ Terjadi kesalahan saat menambahkan file.');
+    }
+    
+    return;
+  }
+  
+  // Check if we're adding a new file
+  if (session && session.addingNewFile) {
+    try {
+      const fileId = ctx.message.document.file_id;
+      const fileName = ctx.message.document.file_name;
+      const filePath = path.join(session.extractPath, fileName);
+      
+      // Status message
+      const statusMsg = await ctx.reply('⏳ Mengunduh file...');
+      
+      // Download file
+      const fileLink = await ctx.telegram.getFileLink(fileId);
+      const response = await fetch(fileLink);
+      const buffer = await response.arrayBuffer();
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      
+      // Update file list
+      session.fileList.push(fileName);
+      session.addingNewFile = false;
+      
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        null,
+        `✅ File berhasil ditambahkan: ${fileName}`
+      );
+      
+      await showFileList(ctx, userId);
+      
+    } catch (error) {
+      console.error('Error adding new file:', error);
+      ctx.reply('❌ Terjadi kesalahan saat menambahkan file.');
+    }
+    
+    return;
+  }
   
   // Check if we're in file replacement mode
   if (session && session.waitingForFile) {
@@ -398,7 +700,7 @@ bot.on(message('document'), async (ctx) => {
       console.error('Error replacing file:', error);
       ctx.reply('❌ Terjadi kesalahan saat mengganti file.');
     }
-    return; // Important: return here to avoid processing this as a new ZIP
+    return;
   }
   
   // If we get here, this is a new ZIP upload, not a replacement
@@ -499,6 +801,34 @@ function zipDirectory(sourceDir, zip, parentDir) {
       zip.addFile(relativePath, fileData);
     }
   });
+}
+
+// Function to check if a file is a text file
+function isTextFile(filePath, mimeType) {
+  // Common text mime types
+  const textMimeTypes = [
+    'text/',
+    'application/json',
+    'application/javascript',
+    'application/xml',
+    'application/x-httpd-php'
+  ];
+  
+  // Check mime type
+  if (textMimeTypes.some(type => mimeType.startsWith(type))) {
+    return true;
+  }
+  
+  // Common source code extensions
+  const codeExtensions = [
+    '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.php', '.py', 
+    '.java', '.c', '.cpp', '.h', '.cs', '.go', '.rb', '.pl', '.sh',
+    '.json', '.xml', '.yaml', '.yml', '.md', '.txt', '.csv', '.sql',
+    '.config', '.ini', '.env', '.htaccess', '.conf'
+  ];
+  
+  const ext = path.extname(filePath).toLowerCase();
+  return codeExtensions.includes(ext);
 }
 
 // Start the bot
