@@ -223,7 +223,7 @@ bot.action('replace', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// Handle rename file action (NEW)
+// Handle rename file action
 bot.action('rename_file', async (ctx) => {
   const userId = ctx.from.id.toString();
   const session = userSessions[userId];
@@ -286,7 +286,7 @@ bot.action('confirm_delete', async (ctx) => {
     session.fileList = session.fileList.filter(file => file !== session.selectedFile);
     
     await ctx.editMessageText(
-      `✅ File berhasil dihapus: \`${session.selectedFile}\``,
+      `✅ File berhasil dihapus: \`${escapeMarkdown(session.selectedFile)}\``,
       {
         parse_mode: 'Markdown'
       }
@@ -300,16 +300,7 @@ bot.action('confirm_delete', async (ctx) => {
   } catch (error) {
     console.error('Error deleting file:', error);
     await ctx.editMessageText(
-      `❌ Terjadi kesalahan saat menghapus file: ${error.message.replace(/[*_`[\]()~>#+=|{}.!-]/g, '\\  await ctx.editMessageText(
-      `❌ Terjadi kesalahan saat menghapus file: ${error.message}`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🔙 Kembali', callback_data: 'back' }]
-          ]
-        }
-      }
-    );')}`,
+      `❌ Terjadi kesalahan saat menghapus file: ${escapeMarkdown(error.message)}`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -366,8 +357,11 @@ bot.action('edit', async (ctx) => {
       ? fileContent.substring(0, 500) + '...' 
       : fileContent;
     
+    // Escape backticks in preview content
+    const safePreview = preview.replace(/```/g, '\\`\\`\\`');
+    
     await ctx.editMessageText(
-      `✏️ *Edit Isi File*: \`${session.selectedFile.replace(/`/g, '\\`')}\`\n\n*Isi saat ini:*\n\`\`\`\n${preview.replace(/```/g, '\\`\\`\\`')}\n\`\`\`\n\nKirim teks baru untuk mengganti isi file, atau klik batal untuk kembali.`,
+      `✏️ *Edit Isi File*: \`${escapeMarkdown(session.selectedFile)}\`\n\n*Isi saat ini:*\n\`\`\`\n${safePreview}\n\`\`\`\n\nKirim teks baru untuk mengganti isi file, atau klik batal untuk kembali.`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -382,6 +376,7 @@ bot.action('edit', async (ctx) => {
     await ctx.editMessageText(
       `⚠️ File tidak dapat diedit sebagai teks. Silahkan pilih opsi lain.`,
       {
+        parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [{ text: '🔙 Kembali', callback_data: 'back' }]
@@ -447,11 +442,14 @@ bot.action('preview', async (ctx) => {
         truncated = true;
       }
       
+      // Escape backticks in preview content
+      const safePreview = previewContent.replace(/```/g, '\\`\\`\\`');
+      
       // Format code for display
-      const formattedCode = `\`\`\`\n${previewContent}\n\`\`\``;
+      const formattedCode = `\`\`\`\n${safePreview}\n\`\`\``;
       
       await ctx.reply(
-        `📝 *Source Code*: \`${session.selectedFile}\`\n\n${formattedCode}${truncated ? '\n\n_[Isi file terlalu panjang, hanya menampilkan 4000 karakter pertama]_' : ''}`,
+        `📝 *Source Code*: \`${escapeMarkdown(session.selectedFile)}\`\n\n${formattedCode}${truncated ? '\n\n_[Isi file terlalu panjang, hanya menampilkan 4000 karakter pertama]_' : ''}`,
         {
           parse_mode: 'Markdown'
         }
@@ -459,7 +457,7 @@ bot.action('preview', async (ctx) => {
     } else {
       // For other file types, just show info
       await ctx.reply(
-        `📄 *File Info*: \`${session.selectedFile}\`\n\nTipe: ${mimeType}\nUkuran: ${fileSize}\n\nFile tipe ini tidak dapat di-preview.`,
+        `📄 *File Info*: \`${escapeMarkdown(session.selectedFile)}\`\n\nTipe: ${escapeMarkdown(mimeType)}\nUkuran: ${fileSize}\n\nFile tipe ini tidak dapat di-preview.`,
         {
           parse_mode: 'Markdown'
         }
@@ -468,7 +466,7 @@ bot.action('preview', async (ctx) => {
     
     // Return to file options after preview
     await ctx.reply(
-      `🔍 *File*: \`${session.selectedFile}\`\n\nSilahkan pilih aksi selanjutnya:`,
+      `🔍 *File*: \`${escapeMarkdown(session.selectedFile)}\`\n\nSilahkan pilih aksi selanjutnya:`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -485,17 +483,8 @@ bot.action('preview', async (ctx) => {
     
   } catch (error) {
     console.error('Error previewing file:', error);
-          await ctx.editMessageText(
-      `❌ Terjadi kesalahan saat preview file: ${error.message.replace(/[*_`[\]()~>#+=|{}.!-]/g, '\\await ctx.editMessageText(
-      `❌ Terjadi kesalahan saat preview file: ${error.message}`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🔙 Kembali', callback_data: 'back' }]
-          ]
-        }
-      }
-    );')}`,
+    await ctx.editMessageText(
+      `❌ Terjadi kesalahan saat preview file: ${escapeMarkdown(error.message)}`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -574,7 +563,9 @@ bot.action('finish', async (ctx) => {
     
   } catch (error) {
     console.error('Error creating ZIP:', error);
-    await ctx.editMessageText('❌ Terjadi kesalahan saat membuat file ZIP.');
+    await ctx.editMessageText('❌ Terjadi kesalahan saat membuat file ZIP.', {
+      parse_mode: 'Markdown'
+    });
   }
 });
 
@@ -596,12 +587,14 @@ bot.on(message('text'), async (ctx) => {
     session.currentZipName = text;
     session.waitingForZipName = false;
     
-    await ctx.reply(`✅ Nama ZIP berhasil diubah menjadi: ${text}`);
+    await ctx.reply(`✅ Nama ZIP berhasil diubah menjadi: ${escapeMarkdown(text)}`, {
+      parse_mode: 'Markdown'
+    });
     await showFileList(ctx, userId);
     return;
   }
   
-  // Handle file rename (NEW)
+  // Handle file rename
   if (session.waitingForFileName) {
     const oldFilePath = path.join(session.extractPath, session.selectedFile);
     const newFilePath = path.join(session.extractPath, text);
@@ -625,7 +618,9 @@ bot.on(message('text'), async (ctx) => {
       session.selectedFile = text;
       session.waitingForFileName = false;
       
-      await ctx.reply(`✅ Nama file berhasil diubah menjadi: ${text}`);
+      await ctx.reply(`✅ Nama file berhasil diubah menjadi: ${escapeMarkdown(text)}`, {
+        parse_mode: 'Markdown'
+      });
       await showFileList(ctx, userId);
     } catch (error) {
       console.error('Error renaming file:', error);
@@ -650,11 +645,15 @@ bot.on(message('text'), async (ctx) => {
       fs.writeFileSync(filePath, text);
       session.waitingForText = false;
       
-      await ctx.reply(`✅ Isi file berhasil diubah: ${session.selectedFile}`);
+      await ctx.reply(`✅ Isi file berhasil diubah: ${escapeMarkdown(session.selectedFile)}`, {
+        parse_mode: 'Markdown'
+      });
       await showFileList(ctx, userId);
     } catch (error) {
       console.error('Error writing file:', error);
-      ctx.reply('❌ Terjadi kesalahan saat menyimpan file.');
+      ctx.reply(`❌ Terjadi kesalahan saat menyimpan file: ${escapeMarkdown(error.message)}`, {
+        parse_mode: 'Markdown'
+      });
     }
     
     return;
@@ -774,7 +773,9 @@ bot.on(message('document'), async (ctx) => {
       return;
     } catch (error) {
       console.error('Error handling new ZIP upload:', error);
-      ctx.reply('❌ Terjadi kesalahan saat memproses file ZIP baru.');
+      ctx.reply(`❌ Terjadi kesalahan saat memproses file ZIP baru: ${escapeMarkdown(error.message)}`, {
+        parse_mode: 'Markdown'
+      });
       return;
     }
   }
@@ -834,7 +835,9 @@ bot.on(message('document'), async (ctx) => {
       }
     } catch (error) {
       console.error('Error adding file with custom path:', error);
-      ctx.reply('❌ Terjadi kesalahan saat menambahkan file.');
+      ctx.reply(`❌ Terjadi kesalahan saat menambahkan file: ${escapeMarkdown(error.message)}`, {
+        parse_mode: 'Markdown'
+      });
     }
     
     return;
@@ -881,12 +884,15 @@ bot.on(message('document'), async (ctx) => {
           ctx.chat.id,
           statusMsg.message_id,
           null,
-          `❌ Terjadi kesalahan saat menambahkan file: ${err.message}`
+          `❌ Terjadi kesalahan saat menambahkan file: ${escapeMarkdown(err.message)}`,
+          { parse_mode: 'Markdown' }
         );
       }
     } catch (error) {
       console.error('Error adding new file:', error);
-      ctx.reply('❌ Terjadi kesalahan saat menambahkan file.');
+      ctx.reply(`❌ Terjadi kesalahan saat menambahkan file: ${escapeMarkdown(error.message)}`, {
+        parse_mode: 'Markdown'
+      });
     }
     
     return;
@@ -936,7 +942,9 @@ bot.on(message('document'), async (ctx) => {
       }
     } catch (error) {
       console.error('Error replacing file:', error);
-      ctx.reply('❌ Terjadi kesalahan saat mengganti file.');
+      ctx.reply(`❌ Terjadi kesalahan saat mengganti file: ${escapeMarkdown(error.message)}`, {
+        parse_mode: 'Markdown'
+      });
     }
     return;
   }
@@ -947,8 +955,7 @@ bot.on(message('document'), async (ctx) => {
 // Helper function to escape Markdown characters
 function escapeMarkdown(text) {
   if (!text) return '';
-  return text.toString().replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\// Utility functions
-function getAllFiles(dir) {');
+  return text.toString().replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
 }
 
 function getAllFiles(dir) {
