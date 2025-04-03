@@ -629,7 +629,9 @@ bot.on(message('text'), async (ctx) => {
       await showFileList(ctx, userId);
     } catch (error) {
       console.error('Error renaming file:', error);
-      await ctx.reply(`❌ Terjadi kesalahan saat mengubah nama file: ${error.message}`);
+      await ctx.reply(`❌ Terjadi kesalahan saat mengubah nama file: ${escapeMarkdown(error.message)}`, {
+        parse_mode: 'Markdown'
+      });
       
       // Return to file list on error
       setTimeout(() => {
@@ -759,7 +761,8 @@ bot.on(message('document'), async (ctx) => {
           ctx.chat.id,
           statusMsg.message_id,
           null,
-          `❌ Terjadi kesalahan saat memproses file ZIP: ${err.message}`
+          `❌ Terjadi kesalahan saat memproses file ZIP: ${escapeMarkdown(err.message)}`,
+          { parse_mode: 'Markdown' }
         );
         
         // Clean up on error
@@ -825,7 +828,8 @@ bot.on(message('document'), async (ctx) => {
           ctx.chat.id,
           statusMsg.message_id,
           null,
-          `❌ Terjadi kesalahan saat menambahkan file: ${err.message}`
+          `❌ Terjadi kesalahan saat menambahkan file: ${escapeMarkdown(err.message)}`,
+          { parse_mode: 'Markdown' }
         );
       }
     } catch (error) {
@@ -926,7 +930,8 @@ bot.on(message('document'), async (ctx) => {
           ctx.chat.id,
           statusMsg.message_id,
           null,
-          `❌ Terjadi kesalahan saat mengganti file: ${err.message}`
+          `❌ Terjadi kesalahan saat mengganti file: ${escapeMarkdown(err.message)}`,
+          { parse_mode: 'Markdown' }
         );
       }
     } catch (error) {
