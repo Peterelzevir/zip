@@ -122,7 +122,7 @@ async function showFileList(ctx, userId, messageId = null, page = 0) {
     { text: '✅ Selesai', callback_data: 'finish' }
   ]);
   
-  const message = `🗂 *ZIP Editor*\n\nNama: \`${session.currentZipName}\`\n\nFile (${startIdx + 1}-${Math.min(startIdx + pageSize, session.fileList.length)} dari ${session.fileList.length}):\nPilih file yang ingin diubah:`;
+  const message = `🗂 *ZIP Editor*\n\nNama: \`${escapeMarkdown(session.currentZipName)}\`\n\nFile (${startIdx + 1}-${Math.min(startIdx + pageSize, session.fileList.length)} dari ${session.fileList.length}):\nPilih file yang ingin diubah:`;
   
   // Edit existing message or send new
   try {
@@ -174,7 +174,7 @@ bot.action(/file:(.+)/, async (ctx) => {
   
   // Show file options
   await ctx.editMessageText(
-    `🔍 *File dipilih*: \`${selectedFile}\`\n\nSilahkan pilih aksi:`,
+    `🔍 *File dipilih*: \`${escapeMarkdown(selectedFile)}\`\n\nSilahkan pilih aksi:`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -209,7 +209,7 @@ bot.action('replace', async (ctx) => {
   session.waitingForFile = true;
   
   await ctx.editMessageText(
-    `📤 *Ganti File*\n\nKirim file baru (format apapun) untuk mengganti:\n\`${session.selectedFile}\`\n\nAtau klik batal untuk kembali.`,
+    `📤 *Ganti File*\n\nKirim file baru (format apapun) untuk mengganti:\n\`${escapeMarkdown(session.selectedFile)}\`\n\nAtau klik batal untuk kembali.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -232,7 +232,7 @@ bot.action('rename_file', async (ctx) => {
   session.waitingForFileName = true;
   
   await ctx.editMessageText(
-    `📝 *Rename File*\n\nNama saat ini: \`${session.selectedFile}\`\n\nKirim nama baru untuk file ini, atau klik batal untuk kembali.`,
+    `📝 *Rename File*\n\nNama saat ini: \`${escapeMarkdown(session.selectedFile)}\`\n\nKirim nama baru untuk file ini, atau klik batal untuk kembali.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -253,7 +253,7 @@ bot.action('delete', async (ctx) => {
   if (!session) return ctx.answerCbQuery('⚠️ Sesi tidak ditemukan');
   
   await ctx.editMessageText(
-    `🗑️ *Hapus File*\n\nAnda yakin ingin menghapus file:\n\`${session.selectedFile}\`?`,
+    `🗑️ *Hapus File*\n\nAnda yakin ingin menghapus file:\n\`${escapeMarkdown(session.selectedFile)}\`?`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -300,8 +300,18 @@ bot.action('confirm_delete', async (ctx) => {
   } catch (error) {
     console.error('Error deleting file:', error);
     await ctx.editMessageText(
+      `❌ Terjadi kesalahan saat menghapus file: ${error.message.replace(/[*_`[\]()~>#+=|{}.!-]/g, '\\  await ctx.editMessageText(
       `❌ Terjadi kesalahan saat menghapus file: ${error.message}`,
       {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Kembali', callback_data: 'back' }]
+          ]
+        }
+      }
+    );')}`,
+      {
+        parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [{ text: '🔙 Kembali', callback_data: 'back' }]
@@ -323,7 +333,7 @@ bot.action('add_file', async (ctx) => {
   session.addingNewFile = true;
   
   await ctx.editMessageText(
-    `➕ *Tambah File Baru*\n\nKirim file baru yang ingin ditambahkan ke dalam ZIP.\nAtau kirim pesan dalam format:\n\n/path nama_file.ext\n\nUntuk menambahkan file ke dalam folder.`,
+    `➕ *Tambah File Baru*\n\nKirim file baru yang ingin ditambahkan ke dalam ZIP.\nAtau kirim pesan dalam format:\n\n\`/path nama_file.ext\`\n\nUntuk menambahkan file ke dalam folder.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -357,7 +367,7 @@ bot.action('edit', async (ctx) => {
       : fileContent;
     
     await ctx.editMessageText(
-      `✏️ *Edit Isi File*: \`${session.selectedFile}\`\n\n*Isi saat ini:*\n\`\`\`\n${preview}\n\`\`\`\n\nKirim teks baru untuk mengganti isi file, atau klik batal untuk kembali.`,
+      `✏️ *Edit Isi File*: \`${session.selectedFile.replace(/`/g, '\\`')}\`\n\n*Isi saat ini:*\n\`\`\`\n${preview.replace(/```/g, '\\`\\`\\`')}\n\`\`\`\n\nKirim teks baru untuk mengganti isi file, atau klik batal untuk kembali.`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -402,7 +412,7 @@ bot.action('preview', async (ctx) => {
     const fileType = mimeType.split('/')[0];
     
     await ctx.editMessageText(
-      `🔍 *Preview File*: \`${session.selectedFile}\`\n\nTipe: ${mimeType}\nUkuran: ${fileSize}\n\nSedang memproses preview...`,
+      `🔍 *Preview File*: \`${escapeMarkdown(session.selectedFile)}\`\n\nTipe: ${escapeMarkdown(mimeType)}\nUkuran: ${fileSize}\n\nSedang memproses preview...`,
       {
         parse_mode: 'Markdown'
       }
@@ -475,9 +485,19 @@ bot.action('preview', async (ctx) => {
     
   } catch (error) {
     console.error('Error previewing file:', error);
-    await ctx.editMessageText(
+          await ctx.editMessageText(
+      `❌ Terjadi kesalahan saat preview file: ${error.message.replace(/[*_`[\]()~>#+=|{}.!-]/g, '\\await ctx.editMessageText(
       `❌ Terjadi kesalahan saat preview file: ${error.message}`,
       {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Kembali', callback_data: 'back' }]
+          ]
+        }
+      }
+    );')}`,
+      {
+        parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [{ text: '🔙 Kembali', callback_data: 'back' }]
@@ -499,7 +519,7 @@ bot.action('rename', async (ctx) => {
   session.waitingForZipName = true;
   
   await ctx.editMessageText(
-    `📝 *Ubah Nama ZIP*\n\nNama saat ini: \`${session.currentZipName}\`\n\nKirim nama baru untuk file ZIP, atau klik batal untuk kembali.`,
+    `📝 *Ubah Nama ZIP*\n\nNama saat ini: \`${escapeMarkdown(session.currentZipName)}\`\n\nKirim nama baru untuk file ZIP, atau klik batal untuk kembali.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -643,7 +663,7 @@ bot.on(message('text'), async (ctx) => {
     session.waitingForFileWithPath = text.substring(6);
     
     await ctx.reply(
-      `📂 *Custom Path*\n\nFile akan disimpan sebagai: \`${session.waitingForFileWithPath}\`\n\nKirim file yang ingin ditambahkan ke path ini.`,
+      `📂 *Custom Path*\n\nFile akan disimpan sebagai: \`${escapeMarkdown(session.waitingForFileWithPath)}\`\n\nKirim file yang ingin ditambahkan ke path ini.`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -794,7 +814,8 @@ bot.on(message('document'), async (ctx) => {
           ctx.chat.id,
           statusMsg.message_id,
           null,
-          `✅ File berhasil ditambahkan: ${customPath}`
+          `✅ File berhasil ditambahkan: ${escapeMarkdown(customPath)}`,
+          { parse_mode: 'Markdown' }
         );
         
         await showFileList(ctx, userId);
@@ -845,7 +866,8 @@ bot.on(message('document'), async (ctx) => {
           ctx.chat.id,
           statusMsg.message_id,
           null,
-          `✅ File berhasil ditambahkan: ${fileName}`
+          `✅ File berhasil ditambahkan: ${escapeMarkdown(fileName)}`,
+          { parse_mode: 'Markdown' }
         );
         
         await showFileList(ctx, userId);
@@ -893,7 +915,8 @@ bot.on(message('document'), async (ctx) => {
           ctx.chat.id,
           statusMsg.message_id,
           null,
-          `✅ File berhasil diganti: ${session.selectedFile}`
+          `✅ File berhasil diganti: ${escapeMarkdown(session.selectedFile)}`,
+          { parse_mode: 'Markdown' }
         );
         
         await showFileList(ctx, userId);
@@ -915,6 +938,14 @@ bot.on(message('document'), async (ctx) => {
 });
 
 // Utility functions
+
+// Helper function to escape Markdown characters
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return text.toString().replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\// Utility functions
+function getAllFiles(dir) {');
+}
+
 function getAllFiles(dir) {
   let results = [];
   
