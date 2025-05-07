@@ -9,7 +9,7 @@ const axios = require('axios');
 const LocalSession = require('telegraf-session-local');
 
 // Bot configuration - Telegram bot token from BotFather
-const BOT_TOKEN = '7332933814:AAGm2mbyQM6UyMQGggJyXbRsAgESv5c1uk8';
+const BOT_TOKEN = '7332933814:AAEdsUhJzKA9vULNOx5pWai4FGOGuKo5gM4';
 const bot = new Telegraf(BOT_TOKEN);
 
 // List of Telegram user IDs that can use the bot (admins)
