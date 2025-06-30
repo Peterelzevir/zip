@@ -6,7 +6,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 
 // Bot Token - Ganti dengan token bot Anda
-const BOT_TOKEN = '7566921062:AAEyph6icSScdJTuYXhvJnWLFuRruF0VNDg';
+const BOT_TOKEN = '7566921062:AAHJ4ij3ObZA9Rl8lfrhuZ5KTZaY82gKeHA';
 const IMGBB_API_KEY = 'acda84e3410cd744c9a9efeb98ebc154'; // Daftar di imgbb.com untuk API key
 
 // Inisialisasi bot
