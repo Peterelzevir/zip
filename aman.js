@@ -59,26 +59,115 @@ function saveData(data) {
 // Global data
 let botData = loadData();
 
-// Upload image to ImgBB
+// FIXED: Upload image to ImgBB with better error handling
 async function uploadToImgBB(photoBuffer) {
     try {
+        console.log('📤 Uploading image to ImgBB...');
+        
+        // Convert buffer to base64
+        const base64Image = photoBuffer.toString('base64');
+        
+        // Create form data
         const formData = new FormData();
-        formData.append('image', photoBuffer.toString('base64'));
+        formData.append('image', base64Image);
         
-        const response = await axios.post(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, formData, {
-            headers: formData.getHeaders()
-        });
+        // Upload to ImgBB
+        const response = await axios.post(
+            `https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`,
+            formData,
+            {
+                headers: {
+                    ...formData.getHeaders(),
+                    'Content-Type': 'multipart/form-data'
+                },
+                timeout: 30000, // 30 seconds timeout
+                maxContentLength: 50 * 1024 * 1024, // 50MB max
+                maxBodyLength: 50 * 1024 * 1024
+            }
+        );
         
-        return response.data.data.url;
+        if (response.data && response.data.success && response.data.data) {
+            console.log('✅ Image uploaded successfully:', response.data.data.url);
+            return response.data.data.url;
+        } else {
+            console.error('❌ ImgBB upload failed:', response.data);
+            return null;
+        }
+        
     } catch (error) {
-        console.error('Error uploading to ImgBB:', error);
+        console.error('❌ Error uploading to ImgBB:', error.message);
+        
+        // Log specific error details
+        if (error.response) {
+            console.error('Response status:', error.response.status);
+            console.error('Response data:', error.response.data);
+        }
+        
         return null;
     }
 }
 
-// AI Analysis dengan custom prompt
+// FIXED: Better image processing with multiple attempts and proper error handling
+async function processImage(photoArray) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            console.log(`🔄 Processing image attempt ${attempt + 1}/3...`);
+            
+            // Get the highest quality photo
+            const photo = photoArray[photoArray.length - 1];
+            const fileId = photo.file_id;
+            
+            console.log('📥 Getting file info from Telegram...');
+            const file = await bot.getFile(fileId);
+            
+            console.log('⬇️ Downloading image from Telegram...');
+            // Download file from Telegram
+            const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+            const response = await axios.get(fileUrl, {
+                responseType: 'arraybuffer',
+                timeout: 30000,
+                maxContentLength: 20 * 1024 * 1024 // 20MB max
+            });
+            
+            const buffer = Buffer.from(response.data);
+            console.log(`📊 Image size: ${buffer.length} bytes`);
+            
+            // Check if image is too large (ImgBB has 32MB limit)
+            if (buffer.length > 32 * 1024 * 1024) {
+                console.error('❌ Image too large for ImgBB (>32MB)');
+                return null;
+            }
+            
+            // Upload to ImgBB
+            const imageUrl = await uploadToImgBB(buffer);
+            
+            if (imageUrl) {
+                console.log('✅ Image processing successful!');
+                return imageUrl;
+            }
+            
+        } catch (error) {
+            console.error(`❌ Image processing attempt ${attempt + 1} failed:`, error.message);
+            
+            if (attempt === 2) {
+                console.error('❌ All image processing attempts failed');
+                return null;
+            }
+            
+            // Wait before retry (exponential backoff)
+            const waitTime = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+            console.log(`⏳ Waiting ${waitTime}ms before retry...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+    }
+    return null;
+}
+
+// FIXED: AI Analysis dengan error handling yang lebih baik
 async function analyzeWithAI(text, imageUrl = null, groupId) {
     try {
+        console.log('🧠 Starting AI analysis...');
+        
         // Ensure session exists for group
         if (!botData.sessions[groupId]) {
             botData.sessions[groupId] = `group_${groupId}_${Date.now()}`;
@@ -104,33 +193,71 @@ FORMAT RESPONS (WAJIB JSON):
 
 Pesan user: ${text}`;
 
-        const apiUrl = imageUrl 
-            ? `https://api.ryzumi.vip/api/ai/v2/chatgpt?text=${encodeURIComponent(customPrompt)}&imageUrl=${encodeURIComponent(imageUrl)}&session=${botData.sessions[groupId]}`
-            : `https://api.ryzumi.vip/api/ai/v2/chatgpt?text=${encodeURIComponent(customPrompt)}&session=${botData.sessions[groupId]}`;
+        // Build API URL
+        const baseUrl = 'https://api.ryzumi.vip/api/ai/v2/chatgpt';
+        const params = new URLSearchParams({
+            text: customPrompt,
+            session: botData.sessions[groupId]
+        });
+        
+        if (imageUrl) {
+            params.append('imageUrl', imageUrl);
+            console.log('🖼️ Analyzing with image:', imageUrl);
+        }
+        
+        const apiUrl = `${baseUrl}?${params.toString()}`;
+        console.log('🌐 Making API request...');
 
-        const response = await axios.get(apiUrl);
+        const response = await axios.get(apiUrl, {
+            timeout: 30000, // 30 seconds
+            headers: {
+                'User-Agent': 'Telegram-Bot/1.0'
+            }
+        });
+        
+        console.log('📡 API response received');
         
         if (response.data && response.data.result) {
             try {
                 // Try to parse JSON from AI response
                 const jsonMatch = response.data.result.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
-                    return JSON.parse(jsonMatch[0]);
+                    const decision = JSON.parse(jsonMatch[0]);
+                    console.log('✅ AI analysis completed:', decision.decision);
+                    return decision;
                 }
-            } catch (e) {
-                // If JSON parsing fails, create default response
+                
+                // If no JSON found, create default safe response
+                console.log('⚠️ No JSON found in AI response, defaulting to SAFE');
                 return {
                     decision: 'SAFE',
-                    reason: 'Tidak dapat menganalisis dengan benar',
+                    reason: 'Tidak dapat menganalisis format respons',
+                    severity: 1,
+                    message_to_user: 'Pesan aman'
+                };
+                
+            } catch (parseError) {
+                console.error('❌ JSON parsing failed:', parseError);
+                return {
+                    decision: 'SAFE',
+                    reason: 'Error parsing AI response',
                     severity: 1,
                     message_to_user: 'Pesan aman'
                 };
             }
+        } else {
+            console.error('❌ Invalid API response:', response.data);
+            return null;
         }
         
-        return null;
     } catch (error) {
-        console.error('Error analyzing with AI:', error);
+        console.error('❌ Error in AI analysis:', error.message);
+        
+        if (error.response) {
+            console.error('API Error Status:', error.response.status);
+            console.error('API Error Data:', error.response.data);
+        }
+        
         return null;
     }
 }
