@@ -1,442 +1,289 @@
 //
 const TelegramBot = require('node-telegram-bot-api');
-const sqlite3 = require('sqlite3').verbose();
-const axios = require('axios');
-const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
-const cron = require('node-cron');
+const axios = require('axios');
+const FormData = require('form-data');
 
-// Bot Configuration
+// Bot Token - Ganti dengan token bot Anda
 const BOT_TOKEN = '7566921062:AAEyph6icSScdJTuYXhvJnWLFuRruF0VNDg';
-const IMGBB_API_KEY = 'acda84e3410cd744c9a9efeb98ebc154';
-const MAIN_ADMIN_ID = '5988451717'; // ID admin utama
+const IMGBB_API_KEY = 'acda84e3410cd744c9a9efeb98ebc154'; // Daftar di imgbb.com untuk API key
 
+// Inisialisasi bot
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// Database Setup
-const db = new sqlite3.Database('bot_security.db');
+// File untuk menyimpan data
+const DATA_FILE = './bot_data.json';
 
-// Initialize Database Tables
-db.serialize(() => {
-    // Tabel grup yang dikelola
-    db.run(`CREATE TABLE IF NOT EXISTS managed_groups (
-        group_id TEXT PRIMARY KEY,
-        group_name TEXT,
-        added_by TEXT,
-        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        detection_enabled INTEGER DEFAULT 1
-    )`);
+// Default data structure
+const defaultData = {
+    admins: [5988451717], // ID admin utama (ganti dengan ID Telegram Anda)
+    mainAdmin: 5988451717, // ID admin utama yang tidak bisa dihapus
+    groups: [], // List grup yang dikelola
+    detectionEnabled: true,
+    sessions: {}, // Session untuk setiap grup
+    statistics: {
+        totalWarnings: 0,
+        totalBans: 0,
+        totalRestrictions: 0,
+        totalDeletedMessages: 0,
+        suspiciousUsers: [],
+        dailyReports: []
+    },
+    userWarnings: {}, // Track peringatan per user per grup
+    spamDetection: {} // Track spam per user
+};
 
-    // Tabel admin bot
-    db.run(`CREATE TABLE IF NOT EXISTS bot_admins (
-        user_id TEXT PRIMARY KEY,
-        username TEXT,
-        added_by TEXT,
-        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        is_main_admin INTEGER DEFAULT 0
-    )`);
-
-    // Tabel log aktivitas
-    db.run(`CREATE TABLE IF NOT EXISTS activity_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id TEXT,
-        user_id TEXT,
-        username TEXT,
-        action_type TEXT,
-        message TEXT,
-        ai_decision TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Tabel peringatan user
-    db.run(`CREATE TABLE IF NOT EXISTS user_warnings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id TEXT,
-        user_id TEXT,
-        username TEXT,
-        warning_count INTEGER DEFAULT 0,
-        last_warning DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Tabel statistik harian
-    db.run(`CREATE TABLE IF NOT EXISTS daily_stats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT,
-        total_messages INTEGER DEFAULT 0,
-        warnings_given INTEGER DEFAULT 0,
-        users_banned INTEGER DEFAULT 0,
-        messages_deleted INTEGER DEFAULT 0,
-        suspicious_images INTEGER DEFAULT 0
-    )`);
-
-    // Insert main admin
-    db.run(`INSERT OR IGNORE INTO bot_admins (user_id, username, is_main_admin) VALUES (?, 'main_admin', 1)`, [MAIN_ADMIN_ID]);
-});
-
-// AI Analysis Functions
-async function analyzeMessage(text, groupId, imageUrl = null) {
+// Load atau create data
+function loadData() {
     try {
-        const customPrompt = `Kamu adalah AI Security Bot yang mengontrol keamanan grup Telegram. Analisis pesan berikut dan berikan keputusan dalam format JSON:
-
-TUGAS UTAMA:
-- Deteksi konten SARA, 18+, spam, toxic, hate speech
-- Deteksi gambar yang tidak pantas atau mencurigakan
-- Berikan keputusan tegas untuk menjaga keamanan grup
-
-KEPUTUSAN YANG BISA DIAMBIL:
-1. "safe" - Pesan aman, tidak perlu tindakan
-2. "warning" - Beri peringatan kepada user
-3. "delete" - Hapus pesan
-4. "delete_warn" - Hapus pesan dan beri peringatan
-5. "restrict" - Batasi user (mute) selama waktu tertentu
-6. "ban" - Keluarkan user dari grup
-
-FORMAT RESPONSE WAJIB JSON:
-{
-    "decision": "safe/warning/delete/delete_warn/restrict/ban",
-    "reason": "alasan keputusan",
-    "severity": 1-10,
-    "restrict_duration": "waktu pembatasan jika restrict (contoh: 1h, 24h, 7d)",
-    "warning_message": "pesan peringatan untuk user"
+        if (fs.existsSync(DATA_FILE)) {
+            const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            return { ...defaultData, ...data };
+        }
+    } catch (error) {
+        console.error('Error loading data:', error);
+    }
+    return defaultData;
 }
 
-PESAN YANG DIANALISIS: ${text}`;
+// Save data
+function saveData(data) {
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    } catch (error) {
+        console.error('Error saving data:', error);
+    }
+}
 
-        let apiUrl = `https://api.ryzumi.vip/api/ai/v2/chatgpt?text=${encodeURIComponent(customPrompt)}&session=security_${groupId}`;
+// Global data
+let botData = loadData();
+
+// Upload image to ImgBB
+async function uploadToImgBB(photoBuffer) {
+    try {
+        const formData = new FormData();
+        formData.append('image', photoBuffer.toString('base64'));
         
-        if (imageUrl) {
-            apiUrl += `&imageUrl=${encodeURIComponent(imageUrl)}`;
+        const response = await axios.post(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, formData, {
+            headers: formData.getHeaders()
+        });
+        
+        return response.data.data.url;
+    } catch (error) {
+        console.error('Error uploading to ImgBB:', error);
+        return null;
+    }
+}
+
+// AI Analysis dengan custom prompt
+async function analyzeWithAI(text, imageUrl = null, groupId) {
+    try {
+        // Ensure session exists for group
+        if (!botData.sessions[groupId]) {
+            botData.sessions[groupId] = `group_${groupId}_${Date.now()}`;
+            saveData(botData);
         }
+
+        const customPrompt = `Kamu adalah AI bot administrator grup Telegram yang bertugas melindungi grup dari konten berbahaya. Analisis pesan/gambar ini dan berikan keputusan yang tepat.
+
+TUGAS KAMU:
+- Deteksi konten 18+, SARA, spam, hate speech, scam, phishing
+- Deteksi gambar tidak pantas, vulgar, kekerasan
+- Deteksi perilaku mencurigakan user
+- Berikan keputusan: DELETE_MESSAGE, WARN_USER, RESTRICT_USER, BAN_USER, atau SAFE
+
+FORMAT RESPONS (WAJIB JSON):
+{
+  "decision": "DELETE_MESSAGE/WARN_USER/RESTRICT_USER/BAN_USER/SAFE",
+  "reason": "alasan singkat",
+  "severity": 1-10,
+  "restriction_duration": "1h/1d/7d/30d" (jika restrict),
+  "message_to_user": "pesan untuk user"
+}
+
+Pesan user: ${text}`;
+
+        const apiUrl = imageUrl 
+            ? `https://api.ryzumi.vip/api/ai/v2/chatgpt?text=${encodeURIComponent(customPrompt)}&imageUrl=${encodeURIComponent(imageUrl)}&session=${botData.sessions[groupId]}`
+            : `https://api.ryzumi.vip/api/ai/v2/chatgpt?text=${encodeURIComponent(customPrompt)}&session=${botData.sessions[groupId]}`;
 
         const response = await axios.get(apiUrl);
         
         if (response.data && response.data.result) {
             try {
-                // Mencoba parse JSON dari response AI
+                // Try to parse JSON from AI response
                 const jsonMatch = response.data.result.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                     return JSON.parse(jsonMatch[0]);
                 }
             } catch (e) {
-                console.log('JSON parse error, using fallback');
+                // If JSON parsing fails, create default response
+                return {
+                    decision: 'SAFE',
+                    reason: 'Tidak dapat menganalisis dengan benar',
+                    severity: 1,
+                    message_to_user: 'Pesan aman'
+                };
             }
-            
-            // Fallback analysis based on keywords
-            return analyzeFallback(text, response.data.result);
         }
         
-        return { decision: "safe", reason: "No analysis available", severity: 1 };
+        return null;
     } catch (error) {
-        console.error('AI Analysis Error:', error);
-        return analyzeFallback(text);
-    }
-}
-
-function analyzeFallback(text, aiResponse = '') {
-    const suspiciousWords = ['anjing', 'babi', 'kontol', 'memek', 'bangsat', 'tolol', 'goblok'];
-    const saraWords = ['china', 'cina', 'pribumi', 'kafir', 'kristen', 'islam', 'hindu', 'budha'];
-    
-    const lowerText = text.toLowerCase();
-    let severity = 1;
-    let decision = "safe";
-    let reason = "Pesan terlihat aman";
-
-    // Check for suspicious words
-    for (let word of suspiciousWords) {
-        if (lowerText.includes(word)) {
-            severity = Math.min(severity + 3, 10);
-            decision = severity > 6 ? "ban" : severity > 4 ? "delete_warn" : "warning";
-            reason = "Terdeteksi kata kasar/toxic";
-            break;
-        }
-    }
-
-    // Check for SARA content
-    for (let word of saraWords) {
-        if (lowerText.includes(word) && (lowerText.includes('benci') || lowerText.includes('bodoh') || lowerText.includes('jahat'))) {
-            severity = 8;
-            decision = "delete_warn";
-            reason = "Terdeteksi konten SARA";
-            break;
-        }
-    }
-
-    // Check if AI detected something suspicious
-    if (aiResponse.toLowerCase().includes('tidak pantas') || aiResponse.toLowerCase().includes('berbahaya')) {
-        severity = Math.max(severity, 6);
-        decision = severity > 7 ? "ban" : "delete_warn";
-        reason = "AI mendeteksi konten mencurigakan";
-    }
-
-    return {
-        decision,
-        reason,
-        severity,
-        restrict_duration: "24h",
-        warning_message: `⚠️ Peringatan: ${reason}. Harap jaga perilaku di grup ini.`
-    };
-}
-
-// Image Upload to ImgBB
-async function uploadToImgBB(imagePath) {
-    try {
-        const form = new FormData();
-        form.append('image', fs.createReadStream(imagePath));
-
-        const response = await axios.post(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, form, {
-            headers: form.getHeaders()
-        });
-
-        if (response.data.success) {
-            return response.data.data.url;
-        }
-        throw new Error('Upload failed');
-    } catch (error) {
-        console.error('ImgBB Upload Error:', error);
+        console.error('Error analyzing with AI:', error);
         return null;
     }
 }
 
-// Database Helper Functions
-function isAdmin(userId) {
-    return new Promise((resolve) => {
-        db.get(`SELECT * FROM bot_admins WHERE user_id = ?`, [userId], (err, row) => {
-            resolve(!!row);
-        });
-    });
-}
-
-function isGroupManaged(groupId) {
-    return new Promise((resolve) => {
-        db.get(`SELECT * FROM managed_groups WHERE group_id = ?`, [groupId], (err, row) => {
-            resolve(!!row);
-        });
-    });
-}
-
-function isDetectionEnabled(groupId) {
-    return new Promise((resolve) => {
-        db.get(`SELECT detection_enabled FROM managed_groups WHERE group_id = ?`, [groupId], (err, row) => {
-            resolve(row ? !!row.detection_enabled : false);
-        });
-    });
-}
-
-function addWarning(groupId, userId, username) {
-    return new Promise((resolve) => {
-        db.run(`INSERT OR REPLACE INTO user_warnings (group_id, user_id, username, warning_count, last_warning) 
-                VALUES (?, ?, ?, COALESCE((SELECT warning_count FROM user_warnings WHERE group_id = ? AND user_id = ?), 0) + 1, CURRENT_TIMESTAMP)`,
-                [groupId, userId, username, groupId, userId], function(err) {
-            if (!err) {
-                db.get(`SELECT warning_count FROM user_warnings WHERE group_id = ? AND user_id = ?`, 
-                       [groupId, userId], (err, row) => {
-                    resolve(row ? row.warning_count : 1);
-                });
-            } else {
-                resolve(1);
-            }
-        });
-    });
-}
-
-function logActivity(groupId, userId, username, actionType, message, aiDecision) {
-    db.run(`INSERT INTO activity_logs (group_id, user_id, username, action_type, message, ai_decision) 
-            VALUES (?, ?, ?, ?, ?, ?)`, 
-            [groupId, userId, username, actionType, message, JSON.stringify(aiDecision)]);
-}
-
-function updateDailyStats(type) {
-    const today = new Date().toISOString().split('T')[0];
+// Spam detection
+function detectSpam(userId, groupId) {
+    const key = `${userId}_${groupId}`;
+    const now = Date.now();
     
-    db.run(`INSERT OR IGNORE INTO daily_stats (date) VALUES (?)`, [today]);
-    
-    let column = '';
-    switch(type) {
-        case 'message': column = 'total_messages'; break;
-        case 'warning': column = 'warnings_given'; break;
-        case 'ban': column = 'users_banned'; break;
-        case 'delete': column = 'messages_deleted'; break;
-        case 'image': column = 'suspicious_images'; break;
+    if (!botData.spamDetection[key]) {
+        botData.spamDetection[key] = [];
     }
     
-    if (column) {
-        db.run(`UPDATE daily_stats SET ${column} = ${column} + 1 WHERE date = ?`, [today]);
-    }
+    // Remove old entries (older than 1 minute)
+    botData.spamDetection[key] = botData.spamDetection[key].filter(time => now - time < 60000);
+    
+    // Add current time
+    botData.spamDetection[key].push(now);
+    
+    // If more than 10 messages in 1 minute, it's spam
+    return botData.spamDetection[key].length > 10;
 }
 
-// Execute AI Decision
-async function executeDecision(chatId, messageId, userId, username, decision) {
+// Execute AI decision
+async function executeDecision(decision, msg, reason) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const messageId = msg.message_id;
+    
     try {
-        switch(decision.decision) {
-            case 'warning':
-                await bot.sendMessage(chatId, `⚠️ @${username} ${decision.warning_message}`, {
+        switch (decision.decision) {
+            case 'DELETE_MESSAGE':
+                await bot.deleteMessage(chatId, messageId);
+                await bot.sendMessage(chatId, `⚠️ Pesan dihapus: ${decision.reason}`, {
                     reply_to_message_id: messageId
-                });
-                await addWarning(chatId, userId, username);
-                updateDailyStats('warning');
+                }).catch(() => {});
+                botData.statistics.totalDeletedMessages++;
                 break;
-
-            case 'delete':
-                await bot.deleteMessage(chatId, messageId);
-                updateDailyStats('delete');
+                
+            case 'WARN_USER':
+                if (!botData.userWarnings[`${userId}_${chatId}`]) {
+                    botData.userWarnings[`${userId}_${chatId}`] = 0;
+                }
+                botData.userWarnings[`${userId}_${chatId}`]++;
+                
+                const warningCount = botData.userWarnings[`${userId}_${chatId}`];
+                await bot.sendMessage(chatId, 
+                    `⚠️ Peringatan untuk @${msg.from.username || msg.from.first_name}\n` +
+                    `Alasan: ${decision.reason}\n` +
+                    `Peringatan: ${warningCount}/3\n` +
+                    `${decision.message_to_user || ''}`
+                );
+                
+                botData.statistics.totalWarnings++;
+                
+                // Auto ban after 3 warnings
+                if (warningCount >= 3) {
+                    await bot.banChatMember(chatId, userId);
+                    await bot.sendMessage(chatId, `🚫 User @${msg.from.username || msg.from.first_name} dibanned karena 3 peringatan!`);
+                    botData.statistics.totalBans++;
+                }
                 break;
-
-            case 'delete_warn':
-                await bot.deleteMessage(chatId, messageId);
-                await bot.sendMessage(chatId, `🚫 Pesan dari @${username} telah dihapus. ${decision.warning_message}`);
-                await addWarning(chatId, userId, username);
-                updateDailyStats('delete');
-                updateDailyStats('warning');
-                break;
-
-            case 'restrict':
-                const restrictDuration = parseDuration(decision.restrict_duration || '24h');
+                
+            case 'RESTRICT_USER':
+                const duration = decision.restriction_duration || '1d';
+                const durationMs = parseDuration(duration);
+                
                 await bot.restrictChatMember(chatId, userId, {
-                    until_date: Math.floor(Date.now() / 1000) + restrictDuration,
-                    can_send_messages: false
+                    can_send_messages: false,
+                    can_send_media_messages: false,
+                    can_send_polls: false,
+                    can_send_other_messages: false,
+                    can_add_web_page_previews: false,
+                    can_change_info: false,
+                    can_invite_users: false,
+                    can_pin_messages: false,
+                    until_date: Math.floor((Date.now() + durationMs) / 1000)
                 });
-                await bot.sendMessage(chatId, `🔇 @${username} telah dibatasi selama ${decision.restrict_duration}. Alasan: ${decision.reason}`);
-                updateDailyStats('warning');
+                
+                await bot.sendMessage(chatId, 
+                    `🔇 User @${msg.from.username || msg.from.first_name} dibatasi selama ${duration}\n` +
+                    `Alasan: ${decision.reason}`
+                );
+                botData.statistics.totalRestrictions++;
                 break;
-
-            case 'ban':
+                
+            case 'BAN_USER':
                 await bot.banChatMember(chatId, userId);
-                await bot.sendMessage(chatId, `🔨 @${username} telah dikeluarkan dari grup. Alasan: ${decision.reason}`);
-                updateDailyStats('ban');
+                await bot.deleteMessage(chatId, messageId);
+                await bot.sendMessage(chatId, 
+                    `🚫 User @${msg.from.username || msg.from.first_name} dibanned!\n` +
+                    `Alasan: ${decision.reason}`
+                );
+                botData.statistics.totalBans++;
                 break;
         }
+        
+        // Add to suspicious users if severity > 5
+        if (decision.severity > 5) {
+            botData.statistics.suspiciousUsers.push({
+                userId: userId,
+                username: msg.from.username || msg.from.first_name,
+                groupId: chatId,
+                reason: decision.reason,
+                severity: decision.severity,
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        saveData(botData);
+        
     } catch (error) {
-        console.error('Execute Decision Error:', error);
+        console.error('Error executing decision:', error);
     }
 }
 
+// Parse duration string to milliseconds
 function parseDuration(duration) {
-    const match = duration.match(/(\d+)([hd])/);
-    if (!match) return 86400; // default 24 hours
+    const match = duration.match(/(\d+)([hdm])/);
+    if (!match) return 86400000; // Default 1 day
     
     const value = parseInt(match[1]);
     const unit = match[2];
     
-    return unit === 'h' ? value * 3600 : value * 86400;
+    switch (unit) {
+        case 'h': return value * 3600000;
+        case 'd': return value * 86400000;
+        case 'm': return value * 60000;
+        default: return 86400000;
+    }
 }
 
-// Message Handler
-bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const username = msg.from.username || msg.from.first_name;
-    const messageId = msg.message_id;
+// Check if user has admin access
+function isAdmin(userId) {
+    return botData.admins.includes(userId);
+}
 
-    // Skip if not a group chat
-    if (msg.chat.type !== 'group' && msg.chat.type !== 'supergroup') {
-        return;
-    }
+// Check if group is managed
+function isGroupManaged(groupId) {
+    return botData.groups.includes(groupId);
+}
 
-    // Check if group is managed
-    const isManaged = await isGroupManaged(chatId);
-    if (!isManaged) {
-        return;
-    }
-
-    // Check if detection is enabled
-    const detectionEnabled = await isDetectionEnabled(chatId);
-    if (!detectionEnabled) {
-        return;
-    }
-
-    updateDailyStats('message');
-
-    let text = msg.text || msg.caption || '';
-    let imageUrl = null;
-
-    // Handle images
-    if (msg.photo) {
-        try {
-            const photo = msg.photo[msg.photo.length - 1];
-            const file = await bot.getFile(photo.file_id);
-            const filePath = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
-            
-            // Download and upload to ImgBB
-            const response = await axios.get(filePath, { responseType: 'stream' });
-            const tempPath = path.join(__dirname, 'temp_image.jpg');
-            const writer = fs.createWriteStream(tempPath);
-            
-            response.data.pipe(writer);
-            
-            writer.on('finish', async () => {
-                imageUrl = await uploadToImgBB(tempPath);
-                fs.unlinkSync(tempPath); // Clean up temp file
-                
-                if (imageUrl) {
-                    updateDailyStats('image');
-                    const decision = await analyzeMessage(text, chatId, imageUrl);
-                    logActivity(chatId, userId, username, 'image_analysis', text, decision);
-                    
-                    if (decision.decision !== 'safe') {
-                        await executeDecision(chatId, messageId, userId, username, decision);
-                    }
-                }
-            });
-        } catch (error) {
-            console.error('Image processing error:', error);
-        }
-    }
-    
-    // Handle text messages
-    if (text && !imageUrl) {
-        const decision = await analyzeMessage(text, chatId);
-        logActivity(chatId, userId, username, 'text_analysis', text, decision);
-        
-        if (decision.decision !== 'safe') {
-            await executeDecision(chatId, messageId, userId, username, decision);
-        }
-    }
-});
-
-// New Chat Member Handler
-bot.on('new_chat_members', async (msg) => {
-    const chatId = msg.chat.id;
-    const newMembers = msg.new_chat_members;
-
-    for (let member of newMembers) {
-        if (member.id === bot.options.polling.params.offset) { // Bot itself
-            const invitedBy = msg.from.id;
-            const isAdminUser = await isAdmin(invitedBy);
-            const isManaged = await isGroupManaged(chatId);
-
-            if (!isAdminUser || !isManaged) {
-                await bot.sendMessage(chatId, `❌ Maaf, bot ini hanya bisa digunakan di grup yang telah terdaftar. Silakan hubungi admin bot untuk mendapatkan akses.`);
-                await bot.leaveChat(chatId);
-                return;
-            }
-
-            // Check if bot is admin in the group
-            try {
-                const chatMember = await bot.getChatMember(chatId, bot.options.polling.params.offset);
-                if (chatMember.status !== 'administrator') {
-                    await bot.sendMessage(chatId, `⚠️ Bot telah ditambahkan ke grup, tetapi untuk bekerja maksimal, bot perlu dijadikan admin grup ini.`);
-                } else {
-                    await bot.sendMessage(chatId, `✅ Bot Security berhasil diaktifkan! Bot akan memonitor grup ini untuk menjaga keamanan.`);
-                }
-            } catch (error) {
-                console.error('Check admin status error:', error);
-            }
-        }
-    }
-});
-
-// Inline Keyboard
-const adminKeyboard = {
-    reply_markup: {
+// Main menu inline keyboard
+function getMainMenu() {
+    return {
         inline_keyboard: [
             [
                 { text: '➕ Tambah Grup', callback_data: 'add_group' },
                 { text: '➖ Del Grup', callback_data: 'del_group' }
             ],
             [
-                { text: '🟢 Deteksi ON', callback_data: 'detection_on' },
-                { text: '🔴 Deteksi OFF', callback_data: 'detection_off' }
+                { text: '🔍 Deteksi ON', callback_data: 'detection_on' },
+                { text: '🔇 Deteksi OFF', callback_data: 'detection_off' }
             ],
             [
                 { text: '📋 List Grup', callback_data: 'list_groups' },
@@ -447,938 +294,905 @@ const adminKeyboard = {
                 { text: '🗑️ Del Admin', callback_data: 'del_admin' }
             ]
         ]
-    }
-};
+    };
+}
 
-// Start Command
+// Handle /start command
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-
-    if (await isAdmin(userId)) {
-        await bot.sendMessage(chatId, `🤖 <b>Bot Security Admin Panel</b>
-
-Selamat datang di panel admin bot keamanan grup!
-
-<b>Fitur Utama:</b>
-• AI Analysis untuk deteksi konten berbahaya
-• Auto moderation dengan berbagai tingkat sanksi
-• Monitoring real-time aktivitas grup
-• Laporan statistik harian
-• Multi-admin management
-
-Gunakan tombol di bawah untuk mengelola bot:`, 
-        { parse_mode: 'HTML', ...adminKeyboard });
-    } else {
-        await bot.sendMessage(chatId, `❌ Anda tidak memiliki akses ke bot ini. Hubungi admin untuk mendapatkan akses.`);
+    
+    if (!isAdmin(userId)) {
+        return bot.sendMessage(chatId, '❌ Anda tidak memiliki akses ke bot ini.');
     }
+    
+    const welcomeText = `🤖 **Bot Proteksi Grup AI**\n\n` +
+        `Selamat datang Admin! Bot ini menggunakan AI untuk melindungi grup dari:\n` +
+        `• Konten 18+ dan SARA\n` +
+        `• Spam dan hate speech\n` +
+        `• Gambar tidak pantas\n` +
+        `• Perilaku mencurigakan\n\n` +
+        `Status Deteksi: ${botData.detectionEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}\n` +
+        `Grup Dikelola: ${botData.groups.length}\n` +
+        `Total Admin: ${botData.admins.length}`;
+    
+    bot.sendMessage(chatId, welcomeText, {
+        parse_mode: 'Markdown',
+        reply_markup: getMainMenu()
+    });
 });
 
-// Callback Query Handler
-bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const userId = query.from.id;
-    const data = query.data;
-
-    if (!(await isAdmin(userId))) {
-        await bot.answerCallbackQuery(query.id, 'Anda tidak memiliki akses!');
-        return;
+// Handle callback queries
+bot.on('callback_query', async (callbackQuery) => {
+    const msg = callbackQuery.message;
+    const chatId = msg.chat.id;
+    const userId = callbackQuery.from.id;
+    const data = callbackQuery.data;
+    
+    if (!isAdmin(userId)) {
+        return bot.answerCallbackQuery(callbackQuery.id, 'Akses ditolak!', true);
     }
-
-    switch(data) {
+    
+    switch (data) {
         case 'add_group':
-            await bot.sendMessage(chatId, `📝 Untuk menambah grup, silakan:
-1. Tambahkan bot ke grup yang ingin dikelola
-2. Jadikan bot sebagai admin grup
-3. Bot akan otomatis terdaftar jika Anda adalah admin bot`);
-            break;
-
-        case 'del_group':
-            await bot.sendMessage(chatId, `📝 Kirim command: /delgroup [GROUP_ID]
-Contoh: /delgroup -1001234567890
-
-Untuk melihat daftar grup, gunakan tombol "List Grup"`);
-            break;
-
-        case 'detection_on':
-            await bot.sendMessage(chatId, `📝 Kirim command: /detection_on [GROUP_ID]
-Contoh: /detection_on -1001234567890
-
-Untuk mengaktifkan deteksi di semua grup: /detection_on all`);
-            break;
-
-        case 'detection_off':
-            await bot.sendMessage(chatId, `📝 Kirim command: /detection_off [GROUP_ID]
-Contoh: /detection_off -1001234567890
-
-Untuk menonaktifkan deteksi di semua grup: /detection_off all`);
-            break;
-
-        case 'list_groups':
-            db.all(`SELECT * FROM managed_groups ORDER BY added_at DESC`, [], (err, rows) => {
-                if (err || rows.length === 0) {
-                    bot.sendMessage(chatId, '📋 Tidak ada grup yang dikelola.');
-                    return;
+            bot.editMessageText('📝 Kirim ID grup yang ingin ditambahkan:\n\nContoh: -1001234567890', {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🔙 Kembali', callback_data: 'main_menu' }]]
                 }
-
-                let message = '📋 <b>Daftar Grup Dikelola:</b>\n\n';
-                rows.forEach((row, index) => {
-                    const status = row.detection_enabled ? '🟢' : '🔴';
-                    message += `${index + 1}. ${status} <b>${row.group_name}</b>\n`;
-                    message += `   ID: <code>${row.group_id}</code>\n`;
-                    message += `   Ditambahkan: ${row.added_at}\n\n`;
-                });
-
-                bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
             });
-            break;
-
-        case 'add_admin':
-            await bot.sendMessage(chatId, `📝 Kirim command: /addadmin [USER_ID] [USERNAME]
-Contoh: /addadmin 123456789 john_doe`);
-            break;
-
-        case 'del_admin':
-            await bot.sendMessage(chatId, `📝 Kirim command: /deladmin [USER_ID]
-Contoh: /deladmin 123456789
-
-⚠️ Admin utama tidak bisa dihapus!`);
-            break;
-
-        case 'statistics':
-            const today = new Date().toISOString().split('T')[0];
-            db.get(`SELECT * FROM daily_stats WHERE date = ?`, [today], (err, todayStats) => {
-                db.all(`SELECT COUNT(*) as total_groups FROM managed_groups`, [], (err, groupCount) => {
-                    db.all(`SELECT COUNT(*) as total_admins FROM bot_admins`, [], (err, adminCount) => {
-                        db.all(`SELECT COUNT(*) as total_logs FROM activity_logs WHERE date(timestamp) = ?`, [today], (err, logCount) => {
-                            
-                            const stats = todayStats || {
-                                total_messages: 0,
-                                warnings_given: 0,
-                                users_banned: 0,
-                                messages_deleted: 0,
-                                suspicious_images: 0
-                            };
-
-                            const message = `📊 <b>Statistik Bot Security</b>
-
-<b>📅 Hari Ini (${today}):</b>
-💬 Total Pesan: ${stats.total_messages}
-⚠️ Peringatan Diberikan: ${stats.warnings_given}
-🔨 User Dikeluarkan: ${stats.users_banned}
-🗑️ Pesan Dihapus: ${stats.messages_deleted}
-🖼️ Gambar Dianalisis: ${stats.suspicious_images}
-
-<b>🎯 Status Bot:</b>
-📱 Grup Dikelola: ${groupCount[0].total_groups}
-👥 Total Admin: ${adminCount[0].total_admins}
-📝 Log Aktivitas Hari Ini: ${logCount[0].total_logs}
-
-<b>🔄 Status:</b> ✅ Aktif & Berjalan`;
-
-                            bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+            
+            // Listen for next message
+            const addGroupListener = (nextMsg) => {
+                if (nextMsg.chat.id === chatId && nextMsg.from.id === userId) {
+                    const groupId = parseInt(nextMsg.text);
+                    if (isNaN(groupId)) {
+                        bot.sendMessage(chatId, '❌ ID grup tidak valid!');
+                    } else if (botData.groups.includes(groupId)) {
+                        bot.sendMessage(chatId, '⚠️ Grup sudah ada dalam daftar!');
+                    } else {
+                        botData.groups.push(groupId);
+                        saveData(botData);
+                        bot.sendMessage(chatId, `✅ Grup ${groupId} berhasil ditambahkan!`, {
+                            reply_markup: getMainMenu()
                         });
-                    });
-                });
-            });
+                    }
+                    bot.removeListener('message', addGroupListener);
+                }
+            };
+            bot.on('message', addGroupListener);
             break;
-    }
-
-    await bot.answerCallbackQuery(query.id);
-});
-
-// Admin Commands
-bot.onText(/\/addadmin (\d+) (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const adminId = msg.from.id;
-    const newAdminId = match[1];
-    const newAdminUsername = match[2];
-
-    if (!(await isAdmin(adminId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    db.run(`INSERT OR IGNORE INTO bot_admins (user_id, username, added_by) VALUES (?, ?, ?)`,
-           [newAdminId, newAdminUsername, adminId], function(err) {
-        if (err) {
-            bot.sendMessage(chatId, '❌ Gagal menambahkan admin!');
-        } else if (this.changes === 0) {
-            bot.sendMessage(chatId, '⚠️ User sudah menjadi admin!');
-        } else {
-            bot.sendMessage(chatId, `✅ Admin baru berhasil ditambahkan: @${newAdminUsername} (${newAdminId})`);
-        }
-    });
-});
-
-bot.onText(/\/deladmin (\d+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const adminId = msg.from.id;
-    const targetAdminId = match[1];
-
-    if (!(await isAdmin(adminId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    if (targetAdminId === MAIN_ADMIN_ID) {
-        await bot.sendMessage(chatId, '❌ Admin utama tidak bisa dihapus!');
-        return;
-    }
-
-    db.run(`DELETE FROM bot_admins WHERE user_id = ? AND is_main_admin = 0`, [targetAdminId], function(err) {
-        if (err) {
-            bot.sendMessage(chatId, '❌ Gagal menghapus admin!');
-        } else if (this.changes === 0) {
-            bot.sendMessage(chatId, '⚠️ Admin tidak ditemukan atau tidak bisa dihapus!');
-        } else {
-            bot.sendMessage(chatId, `✅ Admin berhasil dihapus: ${targetAdminId}`);
-        }
-    });
-});
-
-bot.onText(/\/delgroup (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const adminId = msg.from.id;
-    const groupId = match[1];
-
-    if (!(await isAdmin(adminId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    // First, check if group exists in database
-    db.get(`SELECT group_name FROM managed_groups WHERE group_id = ?`, [groupId], async (err, row) => {
-        if (err) {
-            bot.sendMessage(chatId, '❌ Gagal mengecek grup!');
-            return;
-        }
-        
-        if (!row) {
-            bot.sendMessage(chatId, '⚠️ Grup tidak ditemukan dalam daftar kelola!');
-            return;
-        }
-
-        const groupName = row.group_name;
-
-        // Delete from database
-        db.run(`DELETE FROM managed_groups WHERE group_id = ?`, [groupId], async function(err) {
-            if (err) {
-                bot.sendMessage(chatId, '❌ Gagal menghapus grup dari database!');
+            
+        case 'del_group':
+            if (botData.groups.length === 0) {
+                bot.answerCallbackQuery(callbackQuery.id, 'Tidak ada grup untuk dihapus!', true);
                 return;
             }
-
-            try {
-                // Send goodbye message to the group
-                await bot.sendMessage(groupId, `👋 <b>Bot Security Keluar</b>
-
-Grup ini telah dihapus dari daftar kelola bot security.
-Bot akan keluar dari grup dalam 10 detik.
-
-Terima kasih telah menggunakan layanan bot security! 🤖`, 
-                { parse_mode: 'HTML' });
-
-                // Wait 10 seconds before leaving
-                setTimeout(async () => {
-                    try {
-                        await bot.leaveChat(groupId);
-                        
-                        // Notify admin about successful operation
-                        await bot.sendMessage(chatId, 
-                            `✅ <b>Operasi Berhasil</b>\n\n` +
-                            `📋 Grup: ${groupName}\n` +
-                            `🆔 ID: <code>${groupId}</code>\n` +
-                            `❌ Status: Dihapus dari daftar kelola\n` +
-                            `🚪 Bot telah keluar dari grup`, 
-                            { parse_mode: 'HTML' });
-
-                        // Log the activity
-                        logActivity(groupId, adminId, 'SYSTEM', 'group_removed', 
-                                  `Group removed from managed list by admin`, {
-                            decision: 'group_removed',
-                            reason: 'Admin removed group from management'
+            
+            const groupButtons = botData.groups.map(groupId => [{
+                text: `Grup: ${groupId}`,
+                callback_data: `remove_group_${groupId}`
+            }]);
+            groupButtons.push([{ text: '🔙 Kembali', callback_data: 'main_menu' }]);
+            
+            bot.editMessageText('🗑️ Pilih grup yang ingin dihapus:', {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                reply_markup: { inline_keyboard: groupButtons }
+            });
+            break;
+            
+        case 'detection_on':
+            botData.detectionEnabled = true;
+            saveData(botData);
+            bot.editMessageText('🟢 Deteksi AI diaktifkan untuk semua grup!', {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                reply_markup: getMainMenu()
+            });
+            break;
+            
+        case 'detection_off':
+            botData.detectionEnabled = false;
+            saveData(botData);
+            bot.editMessageText('🔴 Deteksi AI dinonaktifkan!', {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                reply_markup: getMainMenu()
+            });
+            break;
+            
+        case 'list_groups':
+            let groupList = '📋 **Daftar Grup Dikelola:**\n\n';
+            if (botData.groups.length === 0) {
+                groupList += 'Belum ada grup yang dikelola.';
+            } else {
+                botData.groups.forEach((groupId, index) => {
+                    groupList += `${index + 1}. ID: \`${groupId}\`\n`;
+                });
+            }
+            
+            bot.editMessageText(groupList, {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🔙 Kembali', callback_data: 'main_menu' }]]
+                }
+            });
+            break;
+            
+        case 'add_admin':
+            bot.editMessageText('👤 Kirim ID user yang ingin dijadikan admin:\n\nContoh: 123456789', {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🔙 Kembali', callback_data: 'main_menu' }]]
+                }
+            });
+            
+            const addAdminListener = (nextMsg) => {
+                if (nextMsg.chat.id === chatId && nextMsg.from.id === userId) {
+                    const adminId = parseInt(nextMsg.text);
+                    if (isNaN(adminId)) {
+                        bot.sendMessage(chatId, '❌ ID user tidak valid!');
+                    } else if (botData.admins.includes(adminId)) {
+                        bot.sendMessage(chatId, '⚠️ User sudah menjadi admin!');
+                    } else {
+                        botData.admins.push(adminId);
+                        saveData(botData);
+                        bot.sendMessage(chatId, `✅ User ${adminId} berhasil ditambahkan sebagai admin!`, {
+                            reply_markup: getMainMenu()
                         });
-
-                    } catch (leaveError) {
-                        console.error('Error leaving group:', leaveError);
-                        await bot.sendMessage(chatId, 
-                            `⚠️ Grup berhasil dihapus dari daftar, tetapi bot gagal keluar dari grup.\n` +
-                            `Kemungkinan bot sudah tidak ada di grup atau tidak memiliki izin untuk keluar.\n\n` +
-                            `Grup: ${groupName} (${groupId})`);
                     }
-                }, 10000);
-
-                // Immediate confirmation to admin
-                await bot.sendMessage(chatId, 
-                    `⏳ Grup "${groupName}" berhasil dihapus dari daftar kelola.\n` +
-                    `Bot akan keluar dari grup dalam 10 detik...`);
-
-            } catch (messageError) {
-                console.error('Error sending goodbye message:', messageError);
-                
-                // Still try to leave the group
-                try {
-                    await bot.leaveChat(groupId);
-                    await bot.sendMessage(chatId, 
-                        `✅ Grup berhasil dihapus dari daftar dan bot telah keluar.\n` +
-                        `Grup: ${groupName} (${groupId})`);
-                } catch (leaveError) {
-                    await bot.sendMessage(chatId, 
-                        `⚠️ Grup dihapus dari daftar, tetapi bot gagal keluar.\n` +
-                        `Grup: ${groupName} (${groupId})`);
+                    bot.removeListener('message', addAdminListener);
+                }
+            };
+            bot.on('message', addAdminListener);
+            break;
+            
+        case 'del_admin':
+            const nonMainAdmins = botData.admins.filter(id => id !== botData.mainAdmin);
+            if (nonMainAdmins.length === 0) {
+                bot.answerCallbackQuery(callbackQuery.id, 'Tidak ada admin yang bisa dihapus!', true);
+                return;
+            }
+            
+            const adminButtons = nonMainAdmins.map(adminId => [{
+                text: `Admin: ${adminId}`,
+                callback_data: `remove_admin_${adminId}`
+            }]);
+            adminButtons.push([{ text: '🔙 Kembali', callback_data: 'main_menu' }]);
+            
+            bot.editMessageText('🗑️ Pilih admin yang ingin dihapus:', {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                reply_markup: { inline_keyboard: adminButtons }
+            });
+            break;
+            
+        case 'statistics':
+            const stats = botData.statistics;
+            const statsText = `📊 **Statistik Bot**\n\n` +
+                `🔢 Total Peringatan: ${stats.totalWarnings}\n` +
+                `🚫 Total Ban: ${stats.totalBans}\n` +
+                `🔇 Total Pembatasan: ${stats.totalRestrictions}\n` +
+                `🗑️ Pesan Dihapus: ${stats.totalDeletedMessages}\n` +
+                `⚠️ User Mencurigakan: ${stats.suspiciousUsers.length}\n\n` +
+                `📅 Status: ${botData.detectionEnabled ? '🟢 Aktif' : '🔴 Nonaktif'}\n` +
+                `🏢 Grup Dikelola: ${botData.groups.length}\n` +
+                `👥 Total Admin: ${botData.admins.length}`;
+            
+            bot.editMessageText(statsText, {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '📋 Lihat User Mencurigakan', callback_data: 'suspicious_users' }],
+                        [{ text: '🔙 Kembali', callback_data: 'main_menu' }]
+                    ]
+                }
+            });
+            break;
+            
+        case 'suspicious_users':
+            let suspiciousText = '⚠️ **User Mencurigakan:**\n\n';
+            if (botData.statistics.suspiciousUsers.length === 0) {
+                suspiciousText += 'Tidak ada user mencurigakan.';
+            } else {
+                botData.statistics.suspiciousUsers.slice(-10).forEach((user, index) => {
+                    suspiciousText += `${index + 1}. **${user.username}** (${user.userId})\n`;
+                    suspiciousText += `   Grup: ${user.groupId}\n`;
+                    suspiciousText += `   Alasan: ${user.reason}\n`;
+                    suspiciousText += `   Tingkat: ${user.severity}/10\n`;
+                    suspiciousText += `   Waktu: ${new Date(user.timestamp).toLocaleString()}\n\n`;
+                });
+            }
+            
+            bot.editMessageText(suspiciousText, {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🔙 Kembali', callback_data: 'statistics' }]]
+                }
+            });
+            break;
+            
+        case 'main_menu':
+            const mainText = `🤖 **Bot Proteksi Grup AI**\n\n` +
+                `Status Deteksi: ${botData.detectionEnabled ? '🟢 AKTIF' : '🔴 NONAKTIF'}\n` +
+                `Grup Dikelola: ${botData.groups.length}\n` +
+                `Total Admin: ${botData.admins.length}`;
+            
+            bot.editMessageText(mainText, {
+                chat_id: chatId,
+                message_id: msg.message_id,
+                parse_mode: 'Markdown',
+                reply_markup: getMainMenu()
+            });
+            break;
+            
+        default:
+            if (data.startsWith('remove_group_')) {
+                const groupIdToRemove = parseInt(data.replace('remove_group_', ''));
+                botData.groups = botData.groups.filter(id => id !== groupIdToRemove);
+                saveData(botData);
+                bot.editMessageText(`✅ Grup ${groupIdToRemove} berhasil dihapus!`, {
+                    chat_id: chatId,
+                    message_id: msg.message_id,
+                    reply_markup: getMainMenu()
+                });
+            } else if (data.startsWith('remove_admin_')) {
+                const adminIdToRemove = parseInt(data.replace('remove_admin_', ''));
+                if (adminIdToRemove !== botData.mainAdmin) {
+                    botData.admins = botData.admins.filter(id => id !== adminIdToRemove);
+                    saveData(botData);
+                    bot.editMessageText(`✅ Admin ${adminIdToRemove} berhasil dihapus!`, {
+                        chat_id: chatId,
+                        message_id: msg.message_id,
+                        reply_markup: getMainMenu()
+                    });
                 }
             }
-        });
-    });
+            break;
+    }
+    
+    bot.answerCallbackQuery(callbackQuery.id);
 });
 
-bot.onText(/\/detection_on (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const adminId = msg.from.id;
-    const target = match[1];
-
-    if (!(await isAdmin(adminId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    if (target === 'all') {
-        db.run(`UPDATE managed_groups SET detection_enabled = 1`, [], function(err) {
-            if (err) {
-                bot.sendMessage(chatId, '❌ Gagal mengaktifkan deteksi!');
-            } else {
-                bot.sendMessage(chatId, `✅ Deteksi diaktifkan untuk semua grup (${this.changes} grup)`);
-            }
-        });
-    } else {
-        db.run(`UPDATE managed_groups SET detection_enabled = 1 WHERE group_id = ?`, [target], function(err) {
-            if (err) {
-                bot.sendMessage(chatId, '❌ Gagal mengaktifkan deteksi!');
-            } else if (this.changes === 0) {
-                bot.sendMessage(chatId, '⚠️ Grup tidak ditemukan!');
-            } else {
-                bot.sendMessage(chatId, `✅ Deteksi diaktifkan untuk grup: ${target}`);
-            }
-        });
-    }
-});
-
-bot.onText(/\/detection_off (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const adminId = msg.from.id;
-    const target = match[1];
-
-    if (!(await isAdmin(adminId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    if (target === 'all') {
-        db.run(`UPDATE managed_groups SET detection_enabled = 0`, [], function(err) {
-            if (err) {
-                bot.sendMessage(chatId, '❌ Gagal menonaktifkan deteksi!');
-            } else {
-                bot.sendMessage(chatId, `✅ Deteksi dinonaktifkan untuk semua grup (${this.changes} grup)`);
-            }
-        });
-    } else {
-        db.run(`UPDATE managed_groups SET detection_enabled = 0 WHERE group_id = ?`, [target], function(err) {
-            if (err) {
-                bot.sendMessage(chatId, '❌ Gagal menonaktifkan deteksi!');
-            } else if (this.changes === 0) {
-                bot.sendMessage(chatId, '⚠️ Grup tidak ditemukan!');
-            } else {
-                bot.sendMessage(chatId, `✅ Deteksi dinonaktifkan untuk grup: ${target}`);
-            }
-        });
-    }
-});
-
-// Lanjutan dari kode sebelumnya...
-
-// Auto-register group when bot is added by admin
+// Handle new chat members (bot invited to group)
 bot.on('new_chat_members', async (msg) => {
     const chatId = msg.chat.id;
-    const groupName = msg.chat.title;
-    const addedBy = msg.from.id;
-
-    for (let member of msg.new_chat_members) {
-        if (member.is_bot && member.username === (await bot.getMe()).username) {
-            if (await isAdmin(addedBy)) {
-                // Auto-register the group
-                db.run(`INSERT OR IGNORE INTO managed_groups (group_id, group_name, added_by) VALUES (?, ?, ?)`,
-                       [chatId, groupName, addedBy], function(err) {
-                    if (!err && this.changes > 0) {
-                        bot.sendMessage(chatId, `✅ Grup berhasil ditambahkan ke daftar kelola bot security!`);
-                    }
-                });
-            }
-        }
-    }
-});
-
-// Daily Report Function
-async function generateDailyReport() {
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-
-    return new Promise((resolve) => {
-        db.get(`SELECT * FROM daily_stats WHERE date = ?`, [yesterday], (err, stats) => {
-            if (!stats) {
-                resolve(`📊 <b>Laporan Harian Bot Security</b>
-📅 Tanggal: ${yesterday}
-
-❌ Tidak ada aktivitas tercatat untuk hari kemarin.`);
-                return;
-            }
-
-            // Get top active groups
-            db.all(`SELECT group_id, COUNT(*) as activity_count FROM activity_logs 
-                    WHERE date(timestamp) = ? GROUP BY group_id ORDER BY activity_count DESC LIMIT 5`,
-                    [yesterday], (err, topGroups) => {
-                
-                // Get suspicious users
-                db.all(`SELECT user_id, username, COUNT(*) as violation_count FROM activity_logs 
-                        WHERE date(timestamp) = ? AND ai_decision NOT LIKE '%"decision":"safe"%' 
-                        GROUP BY user_id ORDER BY violation_count DESC LIMIT 5`,
-                        [yesterday], (err, suspiciousUsers) => {
-
-                    let report = `📊 <b>Laporan Harian Bot Security</b>
-📅 Tanggal: ${yesterday}
-
-<b>📈 Statistik Aktivitas:</b>
-💬 Total Pesan Diproses: ${stats.total_messages}
-⚠️ Peringatan Diberikan: ${stats.warnings_given}
-🔨 User Dikeluarkan: ${stats.users_banned}
-🗑️ Pesan Dihapus: ${stats.messages_deleted}
-🖼️ Gambar Dianalisis: ${stats.suspicious_images}
-
-<b>🏆 Grup Paling Aktif:</b>`;
-
-                    if (topGroups && topGroups.length > 0) {
-                        topGroups.forEach((group, index) => {
-                            report += `\n${index + 1}. Group ${group.group_id} (${group.activity_count} aktivitas)`;
-                        });
-                    } else {
-                        report += '\nTidak ada aktivitas grup.';
-                    }
-
-                    report += '\n\n<b>⚠️ User Mencurigakan:</b>';
-                    if (suspiciousUsers && suspiciousUsers.length > 0) {
-                        suspiciousUsers.forEach((user, index) => {
-                            report += `\n${index + 1}. @${user.username || 'Unknown'} (${user.violation_count} pelanggaran)`;
-                        });
-                    } else {
-                        report += '\nTidak ada user mencurigakan.';
-                    }
-
-                    report += `\n\n<b>🔒 Tingkat Keamanan:</b> `;
-                    const totalViolations = stats.warnings_given + stats.users_banned + stats.messages_deleted;
-                    if (totalViolations === 0) {
-                        report += '🟢 AMAN';
-                    } else if (totalViolations < 10) {
-                        report += '🟡 WASPADA';
-                    } else {
-                        report += '🔴 TINGGI';
-                    }
-
-                    report += `\n\n<i>Bot Security aktif 24/7 menjaga keamanan grup Anda.</i>`;
-                    resolve(report);
-                });
-            });
-        });
-    });
-}
-
-// Send daily report to all admins
-async function sendDailyReportToAdmins() {
-    const report = await generateDailyReport();
+    const newMembers = msg.new_chat_members;
     
-    db.all(`SELECT user_id FROM bot_admins`, [], (err, admins) => {
-        if (!err && admins) {
-            admins.forEach(admin => {
-                bot.sendMessage(admin.user_id, report, { parse_mode: 'HTML' })
-                    .catch(err => console.log(`Failed to send report to admin ${admin.user_id}:`, err));
-            });
-        }
-    });
-}
-
-// Schedule daily report at 8 AM
-cron.schedule('0 8 * * *', () => {
-    console.log('Sending daily report...');
-    sendDailyReportToAdmins();
-}, {
-    timezone: "Asia/Jakarta"
-});
-
-// Manual report command
-bot.onText(/\/report/, async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    const report = await generateDailyReport();
-    await bot.sendMessage(chatId, report, { parse_mode: 'HTML' });
-});
-
-// Advanced Security Features
-bot.onText(/\/security_check/, async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    // Check recent suspicious activities
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    // Check if bot was added
+    const botAdded = newMembers.some(member => member.id === parseInt(BOT_TOKEN.split(':')[0]));
     
-    db.all(`SELECT * FROM activity_logs WHERE date(timestamp) >= ? AND ai_decision NOT LIKE '%"decision":"safe"%' ORDER BY timestamp DESC LIMIT 20`,
-           [yesterday], (err, recentActivities) => {
+    if (botAdded) {
+        const inviterId = msg.from.id;
         
-        if (!recentActivities || recentActivities.length === 0) {
-            bot.sendMessage(chatId, '✅ Tidak ada aktivitas mencurigakan dalam 24 jam terakhir.');
+        // Check if inviter is admin and group is in managed list
+        if (!isAdmin(inviterId)) {
+            await bot.sendMessage(chatId, 
+                '❌ Maaf, bot ini hanya bisa digunakan oleh admin yang terdaftar.\n' +
+                'Silakan hubungi admin bot untuk mendapatkan akses.'
+            );
+            
+            // Leave group after 10 seconds
+            setTimeout(async () => {
+                try {
+                    await bot.leaveChat(chatId);
+                } catch (error) {
+                    console.error('Error leaving chat:', error);
+                }
+            }, 10000);
+            
             return;
         }
-
-        let message = `🔍 <b>Pemeriksaan Keamanan 24 Jam Terakhir</b>\n\n`;
-        message += `⚠️ Ditemukan ${recentActivities.length} aktivitas mencurigakan:\n\n`;
-
-        recentActivities.forEach((activity, index) => {
-            const decision = JSON.parse(activity.ai_decision);
-            message += `${index + 1}. <b>@${activity.username}</b>\n`;
-            message += `   📝 Pesan: "${activity.message.substring(0, 50)}..."\n`;
-            message += `   🎯 Keputusan: ${decision.decision}\n`;
-            message += `   📅 Waktu: ${activity.timestamp}\n\n`;
-        });
-
-        bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
-    });
-});
-
-// Group health check
-bot.onText(/\/group_health (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const groupId = match[1];
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
-
-    // Get group statistics for the last 7 days
-    db.all(`SELECT 
-                COUNT(*) as total_activities,
-                COUNT(CASE WHEN ai_decision NOT LIKE '%"decision":"safe"%' THEN 1 END) as violations,
-                COUNT(DISTINCT user_id) as active_users
-            FROM activity_logs 
-            WHERE group_id = ? AND date(timestamp) >= ?`,
-           [groupId, sevenDaysAgo], (err, stats) => {
         
-        if (err || !stats[0]) {
-            bot.sendMessage(chatId, '❌ Gagal mendapatkan statistik grup.');
+        if (!isGroupManaged(chatId)) {
+            await bot.sendMessage(chatId, 
+                '⚠️ Grup ini belum terdaftar dalam daftar grup yang dikelola.\n' +
+                'Bot akan otomatis keluar dalam 10 detik.\n' +
+                'Silakan tambahkan grup ini melalui panel admin bot.'
+            );
+            
+            setTimeout(async () => {
+                try {
+                    await bot.leaveChat(chatId);
+                } catch (error) {
+                    console.error('Error leaving chat:', error);
+                }
+            }, 10000);
+            
             return;
         }
-
-        const stat = stats[0];
-        const violationRate = stat.total_activities > 0 ? (stat.violations / stat.total_activities * 100).toFixed(2) : 0;
-
-        // Get most active users
-        db.all(`SELECT user_id, username, COUNT(*) as message_count
-                FROM activity_logs 
-                WHERE group_id = ? AND date(timestamp) >= ?
-                GROUP BY user_id 
-                ORDER BY message_count DESC LIMIT 5`,
-               [groupId, sevenDaysAgo], (err, activeUsers) => {
-
-            // Get top violators
-            db.all(`SELECT user_id, username, COUNT(*) as violation_count
-                    FROM activity_logs 
-                    WHERE group_id = ? AND date(timestamp) >= ? AND ai_decision NOT LIKE '%"decision":"safe"%'
-                    GROUP BY user_id 
-                    ORDER BY violation_count DESC LIMIT 5`,
-                   [groupId, sevenDaysAgo], (err, violators) => {
-
-                let healthReport = `🏥 <b>Laporan Kesehatan Grup</b>
-📊 ID Grup: <code>${groupId}</code>
-📅 Periode: 7 hari terakhir
-
-<b>📈 Statistik Umum:</b>
-💬 Total Aktivitas: ${stat.total_activities}
-👥 User Aktif: ${stat.active_users}
-⚠️ Pelanggaran: ${stat.violations}
-📊 Tingkat Pelanggaran: ${violationRate}%
-
-<b>🏆 User Paling Aktif:</b>`;
-
-                if (activeUsers && activeUsers.length > 0) {
-                    activeUsers.forEach((user, index) => {
-                        healthReport += `\n${index + 1}. @${user.username || 'Unknown'} (${user.message_count} pesan)`;
-                    });
-                } else {
-                    healthReport += '\nTidak ada data user aktif.';
-                }
-
-                healthReport += '\n\n<b>⚠️ Top Violators:</b>';
-                if (violators && violators.length > 0) {
-                    violators.forEach((user, index) => {
-                        healthReport += `\n${index + 1}. @${user.username || 'Unknown'} (${user.violation_count} pelanggaran)`;
-                    });
-                } else {
-                    healthReport += '\nTidak ada pelanggaran tercatat.';
-                }
-
-                // Health status
-                healthReport += '\n\n<b>🏥 Status Kesehatan Grup:</b> ';
-                if (violationRate < 5) {
-                    healthReport += '🟢 SEHAT';
-                } else if (violationRate < 15) {
-                    healthReport += '🟡 PERLU PERHATIAN';
-                } else {
-                    healthReport += '🔴 TIDAK SEHAT';
-                }
-
-                bot.sendMessage(chatId, healthReport, { parse_mode: 'HTML' });
-            });
-        });
-    });
-});
-
-// Emergency lockdown command
-bot.onText(/\/lockdown (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const groupId = match[1];
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    try {
-        // Set group permissions to restrict all members
-        await bot.setChatPermissions(groupId, {
-            can_send_messages: false,
-            can_send_media_messages: false,
-            can_send_polls: false,
-            can_send_other_messages: false,
-            can_add_web_page_previews: false,
-            can_change_info: false,
-            can_invite_users: false,
-            can_pin_messages: false
-        });
-
-        await bot.sendMessage(groupId, `🚨 <b>LOCKDOWN DIAKTIFKAN</b>
-
-Grup telah dikunci sementara karena aktivitas mencurigakan.
-Hanya admin yang dapat mengirim pesan.
-
-Hubungi admin untuk informasi lebih lanjut.`, { parse_mode: 'HTML' });
-
-        await bot.sendMessage(chatId, `✅ Lockdown berhasil diaktifkan untuk grup ${groupId}`);
         
-        // Log lockdown activity
-        logActivity(groupId, userId, 'SYSTEM', 'lockdown_activated', 'Emergency lockdown activated', {
-            decision: 'lockdown',
-            reason: 'Emergency lockdown by admin'
-        });
-
-    } catch (error) {
-        console.error('Lockdown error:', error);
-        await bot.sendMessage(chatId, `❌ Gagal mengaktifkan lockdown. Pastikan bot adalah admin di grup tersebut.`);
-    }
-});
-
-// Unlock group command
-bot.onText(/\/unlock (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const groupId = match[1];
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    try {
-        // Restore normal group permissions
-        await bot.setChatPermissions(groupId, {
-            can_send_messages: true,
-            can_send_media_messages: true,
-            can_send_polls: true,
-            can_send_other_messages: true,
-            can_add_web_page_previews: true,
-            can_change_info: false,
-            can_invite_users: true,
-            can_pin_messages: false
-        });
-
-        await bot.sendMessage(groupId, `✅ <b>LOCKDOWN DINONAKTIFKAN</b>
-
-Grup telah dibuka kembali.
-Silakan melanjutkan aktivitas normal.
-
-Harap tetap menjaga etika dan aturan grup.`, { parse_mode: 'HTML' });
-
-        await bot.sendMessage(chatId, `✅ Lockdown berhasil dinonaktifkan untuk grup ${groupId}`);
-        
-        // Log unlock activity
-        logActivity(groupId, userId, 'SYSTEM', 'lockdown_deactivated', 'Lockdown deactivated', {
-            decision: 'unlock',
-            reason: 'Lockdown deactivated by admin'
-        });
-
-    } catch (error) {
-        console.error('Unlock error:', error);
-        await bot.sendMessage(chatId, `❌ Gagal menonaktifkan lockdown. Pastikan bot adalah admin di grup tersebut.`);
-    }
-});
-
-// Bulk user management
-bot.onText(/\/ban_multiple (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const userIds = match[1].split(',').map(id => id.trim());
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    await bot.sendMessage(chatId, `📝 Kirim grup ID dimana user akan di-ban:
-Format: /execute_ban [GROUP_ID]
-User yang akan di-ban: ${userIds.join(', ')}`);
-
-    // Store user IDs for the next command
-    // Note: In production, you might want to use a more persistent storage
-    global.pendingBans = { adminId: userId, userIds: userIds };
-});
-
-bot.onText(/\/execute_ban (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const groupId = match[1];
-
-    if (!(await isAdmin(userId)) || !global.pendingBans || global.pendingBans.adminId !== userId) {
-        await bot.sendMessage(chatId, '❌ Tidak ada operasi ban yang pending!');
-        return;
-    }
-
-    const userIds = global.pendingBans.userIds;
-    let successCount = 0;
-    let failCount = 0;
-
-    for (let targetUserId of userIds) {
+        // Check if bot has admin rights
         try {
-            await bot.banChatMember(groupId, targetUserId);
-            successCount++;
+            const chatMember = await bot.getChatMember(chatId, parseInt(BOT_TOKEN.split(':')[0]));
             
-            // Log ban activity
-            logActivity(groupId, targetUserId, 'UNKNOWN', 'bulk_ban', 'Bulk ban operation', {
-                decision: 'ban',
-                reason: 'Bulk ban by admin'
+            if (chatMember.status !== 'administrator') {
+                await bot.sendMessage(chatId, 
+                    '⚠️ Bot tidak memiliki hak admin di grup ini.\n' +
+                    'Bot tidak akan bekerja maksimal tanpa hak admin.\n' +
+                    'Silakan jadikan bot sebagai admin untuk fitur lengkap.'
+                );
+            } else {
+                await bot.sendMessage(chatId, 
+                    '✅ Bot siap melindungi grup ini!\n\n' +
+                    '🤖 AI Protection System AKTIF\n' +
+                    '🔍 Monitoring: Konten 18+, SARA, Spam\n' +
+                    '🛡️ Auto Action: Peringatan, Restrict, Ban\n' +
+                    '📊 Laporan harian akan dikirim ke admin\n\n' +
+                    'Bot bekerja maksimal! 🚀'
+                );
+            }
+        } catch (error) {
+            console.error('Error checking bot admin status:', error);
+        }
+    }
+});
+
+// Handle all messages in groups
+bot.on('message', async (msg) => {
+    // Skip if not in group or detection disabled
+    if (msg.chat.type === 'private' || !botData.detectionEnabled) return;
+    
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    // Skip if group not managed or user is admin
+    if (!isGroupManaged(chatId) || isAdmin(userId)) return;
+    
+    // Skip bot messages
+    if (msg.from.is_bot) return;
+    
+    try {
+        // Check for spam
+        if (detectSpam(userId, chatId)) {
+            await bot.restrictChatMember(chatId, userId, {
+                can_send_messages: false,
+                until_date: Math.floor((Date.now() + 3600000) / 1000) // 1 hour
             });
             
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limiting
-        } catch (error) {
-            console.error(`Failed to ban user ${targetUserId}:`, error);
-            failCount++;
+            await bot.sendMessage(chatId, 
+                `🚫 @${msg.from.username || msg.from.first_name} dibatasi karena spam!`
+            );
+            
+            botData.statistics.totalRestrictions++;
+            saveData(botData);
+            return;
         }
-    }
-
-    await bot.sendMessage(chatId, `✅ Operasi bulk ban selesai:
-- Berhasil: ${successCount} user
-- Gagal: ${failCount} user`);
-
-    // Clear pending bans
-    delete global.pendingBans;
-    updateDailyStats('ban');
-});
-
-// Advanced word filter management
-const wordFilters = new Map();
-
-bot.onText(/\/add_filter (.+) (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const groupId = match[1];
-    const word = match[2].toLowerCase();
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    if (!wordFilters.has(groupId)) {
-        wordFilters.set(groupId, new Set());
-    }
-    
-    wordFilters.get(groupId).add(word);
-    await bot.sendMessage(chatId, `✅ Filter kata ditambahkan: "${word}" untuk grup ${groupId}`);
-});
-
-bot.onText(/\/remove_filter (.+) (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const groupId = match[1];
-    const word = match[2].toLowerCase();
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    if (wordFilters.has(groupId)) {
-        wordFilters.get(groupId).delete(word);
-        await bot.sendMessage(chatId, `✅ Filter kata dihapus: "${word}" dari grup ${groupId}`);
-    }
-});
-
-// Enhanced message analysis with custom filters
-async function enhancedAnalyzeMessage(text, groupId, imageUrl = null) {
-    // Check custom word filters first
-    if (wordFilters.has(groupId)) {
-        const filters = wordFilters.get(groupId);
-        const lowerText = text.toLowerCase();
         
-        for (let word of filters) {
-            if (lowerText.includes(word)) {
-                return {
-                    decision: "delete_warn",
-                    reason: `Terdeteksi kata terfilter: ${word}`,
-                    severity: 7,
-                    restrict_duration: "24h",
-                    warning_message: `⚠️ Pesan mengandung kata yang difilter: "${word}"`
-                };
+        let imageUrl = null;
+        let messageText = msg.text || msg.caption || '';
+        
+        // Handle photos
+        if (msg.photo) {
+            try {
+                const fileId = msg.photo[msg.photo.length - 1].file_id;
+                const file = await bot.getFile(fileId);
+                const photoBuffer = await bot.downloadFile(file.file_id, './');
+                
+                // Upload to ImgBB
+                imageUrl = await uploadToImgBB(photoBuffer);
+                
+                // Clean up local file
+                if (fs.existsSync(file.file_path)) {
+                    fs.unlinkSync(file.file_path);
+                }
+            } catch (error) {
+                console.error('Error processing photo:', error);
             }
         }
+        
+        // Skip if no content to analyze
+        if (!messageText.trim() && !imageUrl) return;
+        
+        // Analyze with AI
+        const decision = await analyzeWithAI(messageText, imageUrl, chatId);
+        
+        if (decision && decision.decision !== 'SAFE') {
+            await executeDecision(decision, msg, decision.reason);
+        }
+        
+    } catch (error) {
+        console.error('Error processing message:', error);
     }
-
-    // Use original AI analysis
-    return await analyzeMessage(text, groupId, imageUrl);
-}
-
-// Help command for admins
-bot.onText(/\/help/, async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!(await isAdmin(userId))) {
-        await bot.sendMessage(chatId, '❌ Anda tidak memiliki akses!');
-        return;
-    }
-
-    const helpMessage = `🤖 <b>Bot Security - Panduan Admin</b>
-
-<b>📋 Command Utama:</b>
-/start - Panel admin utama
-/help - Panduan ini
-/report - Laporan harian manual
-
-<b>👥 Manajemen Admin:</b>
-/addadmin [USER_ID] [USERNAME] - Tambah admin
-/deladmin [USER_ID] - Hapus admin
-
-<b>🏢 Manajemen Grup:</b>
-/delgroup [GROUP_ID] - Hapus grup dari kelola
-/detection_on [GROUP_ID/all] - Aktifkan deteksi
-/detection_off [GROUP_ID/all] - Nonaktifkan deteksi
-
-<b>🔒 Keamanan Lanjutan:</b>
-/security_check - Cek aktivitas mencurigakan
-/group_health [GROUP_ID] - Laporan kesehatan grup
-/lockdown [GROUP_ID] - Kunci grup darurat
-/unlock [GROUP_ID] - Buka kunci grup
-
-<b>🛡️ Filter Kata:</b>
-/add_filter [GROUP_ID] [KATA] - Tambah filter
-/remove_filter [GROUP_ID] [KATA] - Hapus filter
-
-<b>👨‍⚖️ Manajemen User:</b>
-/ban_multiple [USER_ID1,USER_ID2,...] - Ban multiple user
-/execute_ban [GROUP_ID] - Eksekusi ban
-
-<b>🎯 Fitur Otomatis:</b>
-• AI Analysis untuk setiap pesan
-• Auto-moderation berdasarkan tingkat ancaman
-• Laporan harian otomatis (jam 8 pagi)
-• Deteksi gambar tidak pantas
-• System peringatan bertingkat
-
-<b>📞 Support:</b>
-Bot ini aktif 24/7 dan akan otomatis mengambil tindakan berdasarkan analisis AI yang canggih.`;
-
-    await bot.sendMessage(chatId, helpMessage, { parse_mode: 'HTML' });
 });
 
-// Error handling
+// Daily report function
+// Lanjutan dari kode sebelumnya...
+
+// Daily report function
+function sendDailyReport() {
+    const stats = botData.statistics;
+    const reportText = `📊 **Laporan Harian Bot Proteksi**\n\n` +
+        `📅 Tanggal: ${new Date().toLocaleDateString()}\n\n` +
+        `📈 **Statistik Hari Ini:**\n` +
+        `• Peringatan: ${stats.totalWarnings}\n` +
+        `• Pembatasan: ${stats.totalRestrictions}\n` +
+        `• Ban: ${stats.totalBans}\n` +
+        `• Pesan Dihapus: ${stats.totalDeletedMessages}\n` +
+        `• User Mencurigakan: ${stats.suspiciousUsers.length}\n\n` +
+        `🏢 Grup Aktif: ${botData.groups.length}\n` +
+        `🤖 Status: ${botData.detectionEnabled ? 'Aktif' : 'Nonaktif'}`;
+    
+    // Send to all admins
+    botData.admins.forEach(adminId => {
+        bot.sendMessage(adminId, reportText, { parse_mode: 'Markdown' }).catch(console.error);
+    });
+    
+    // Reset daily statistics
+    botData.statistics.dailyReports.push({
+        date: new Date().toISOString(),
+        warnings: stats.totalWarnings,
+        restrictions: stats.totalRestrictions,
+        bans: stats.totalBans,
+        deletedMessages: stats.totalDeletedMessages,
+        suspiciousUsers: stats.suspiciousUsers.length
+    });
+    
+    // Keep only last 30 days of reports
+    if (botData.statistics.dailyReports.length > 30) {
+        botData.statistics.dailyReports = botData.statistics.dailyReports.slice(-30);
+    }
+    
+    saveData(botData);
+}
+
+// Schedule daily report at 23:59 every day
+function scheduleDailyReport() {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(now.getDate() + 1);
+    tomorrow.setHours(23, 59, 0, 0);
+    
+    const msUntilReport = tomorrow.getTime() - now.getTime();
+    
+    setTimeout(() => {
+        sendDailyReport();
+        // Schedule next report
+        setInterval(sendDailyReport, 24 * 60 * 60 * 1000); // Every 24 hours
+    }, msUntilReport);
+}
+
+// Handle left chat member (when bot is removed)
+bot.on('left_chat_member', async (msg) => {
+    const leftMember = msg.left_chat_member;
+    const chatId = msg.chat.id;
+    
+    // If bot was removed, remove from managed groups
+    if (leftMember.id === parseInt(BOT_TOKEN.split(':')[0])) {
+        botData.groups = botData.groups.filter(groupId => groupId !== chatId);
+        saveData(botData);
+        
+        // Notify admins
+        const notificationText = `🚪 Bot telah dikeluarkan dari grup ${chatId}`;
+        botData.admins.forEach(adminId => {
+            bot.sendMessage(adminId, notificationText).catch(console.error);
+        });
+    }
+});
+
+// Handle document uploads
+bot.on('document', async (msg) => {
+    if (msg.chat.type === 'private' || !botData.detectionEnabled) return;
+    
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    if (!isGroupManaged(chatId) || isAdmin(userId) || msg.from.is_bot) return;
+    
+    try {
+        const fileName = msg.document.file_name || '';
+        const fileSize = msg.document.file_size || 0;
+        const caption = msg.caption || '';
+        
+        // Check for suspicious file types
+        const suspiciousExtensions = ['.exe', '.scr', '.bat', '.cmd', '.com', '.pif', '.vbs', '.jar'];
+        const isSuspicious = suspiciousExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
+        
+        if (isSuspicious || fileSize > 50 * 1024 * 1024) { // >50MB
+            await bot.deleteMessage(chatId, msg.message_id);
+            await bot.sendMessage(chatId, 
+                `🚫 File berbahaya terdeteksi dari @${msg.from.username || msg.from.first_name}!\n` +
+                `File: ${fileName}\n` +
+                `Alasan: ${isSuspicious ? 'Ekstensi berbahaya' : 'File terlalu besar'}`
+            );
+            
+            botData.statistics.totalDeletedMessages++;
+            saveData(botData);
+            return;
+        }
+        
+        // Analyze caption if exists
+        if (caption.trim()) {
+            const decision = await analyzeWithAI(caption, null, chatId);
+            if (decision && decision.decision !== 'SAFE') {
+                await executeDecision(decision, msg, decision.reason);
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error processing document:', error);
+    }
+});
+
+// Handle stickers
+bot.on('sticker', async (msg) => {
+    if (msg.chat.type === 'private' || !botData.detectionEnabled) return;
+    
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    if (!isGroupManaged(chatId) || isAdmin(userId) || msg.from.is_bot) return;
+    
+    try {
+        // Check for spam stickers
+        if (detectSpam(userId, chatId)) {
+            await bot.restrictChatMember(chatId, userId, {
+                can_send_messages: false,
+                until_date: Math.floor((Date.now() + 1800000) / 1000) // 30 minutes
+            });
+            
+            await bot.sendMessage(chatId, 
+                `🚫 @${msg.from.username || msg.from.first_name} dibatasi karena spam sticker!`
+            );
+            
+            botData.statistics.totalRestrictions++;
+            saveData(botData);
+        }
+        
+    } catch (error) {
+        console.error('Error processing sticker:', error);
+    }
+});
+
+// Handle video messages
+bot.on('video', async (msg) => {
+    if (msg.chat.type === 'private' || !botData.detectionEnabled) return;
+    
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    if (!isGroupManaged(chatId) || isAdmin(userId) || msg.from.is_bot) return;
+    
+    try {
+        const caption = msg.caption || '';
+        const duration = msg.video.duration || 0;
+        const fileSize = msg.video.file_size || 0;
+        
+        // Check for large videos (>100MB)
+        if (fileSize > 100 * 1024 * 1024) {
+            await bot.deleteMessage(chatId, msg.message_id);
+            await bot.sendMessage(chatId, 
+                `🚫 Video terlalu besar dari @${msg.from.username || msg.from.first_name}!`
+            );
+            
+            botData.statistics.totalDeletedMessages++;
+            saveData(botData);
+            return;
+        }
+        
+        // Analyze caption if exists
+        if (caption.trim()) {
+            const decision = await analyzeWithAI(caption, null, chatId);
+            if (decision && decision.decision !== 'SAFE') {
+                await executeDecision(decision, msg, decision.reason);
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error processing video:', error);
+    }
+});
+
+// Handle voice messages
+bot.on('voice', async (msg) => {
+    if (msg.chat.type === 'private' || !botData.detectionEnabled) return;
+    
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    if (!isGroupManaged(chatId) || isAdmin(userId) || msg.from.is_bot) return;
+    
+    try {
+        // Check for spam voice messages
+        if (detectSpam(userId, chatId)) {
+            await bot.restrictChatMember(chatId, userId, {
+                can_send_messages: false,
+                until_date: Math.floor((Date.now() + 3600000) / 1000) // 1 hour
+            });
+            
+            await bot.sendMessage(chatId, 
+                `🚫 @${msg.from.username || msg.from.first_name} dibatasi karena spam voice note!`
+            );
+            
+            botData.statistics.totalRestrictions++;
+            saveData(botData);
+        }
+        
+    } catch (error) {
+        console.error('Error processing voice:', error);
+    }
+});
+
+// Handle forwarded messages
+bot.on('message', async (msg) => {
+    if (msg.chat.type === 'private' || !botData.detectionEnabled) return;
+    if (!msg.forward_from && !msg.forward_from_chat) return;
+    
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    if (!isGroupManaged(chatId) || isAdmin(userId) || msg.from.is_bot) return;
+    
+    try {
+        // Check for forwarded messages from suspicious channels/bots
+        const forwardFrom = msg.forward_from_chat || msg.forward_from;
+        
+        if (forwardFrom && forwardFrom.type === 'channel') {
+            // Analyze forwarded content
+            const messageText = msg.text || msg.caption || '';
+            if (messageText.trim()) {
+                const decision = await analyzeWithAI(messageText, null, chatId);
+                if (decision && decision.decision !== 'SAFE') {
+                    await executeDecision(decision, msg, decision.reason);
+                }
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error processing forwarded message:', error);
+    }
+});
+
+// Advanced user behavior analysis
+function analyzeUserBehavior(userId, chatId) {
+    const key = `${userId}_${chatId}`;
+    const warningCount = botData.userWarnings[key] || 0;
+    const spamCount = botData.spamDetection[key] ? botData.spamDetection[key].length : 0;
+    
+    // Calculate suspicion score
+    let suspicionScore = 0;
+    suspicionScore += warningCount * 2; // Each warning adds 2 points
+    suspicionScore += Math.max(0, spamCount - 5); // Spam messages over 5 add points
+    
+    return {
+        warningCount,
+        spamCount,
+        suspicionScore,
+        isSuspicious: suspicionScore > 5
+    };
+}
+
+// Cleanup old data periodically
+function cleanupOldData() {
+    const now = Date.now();
+    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+    const oneWeekAgo = now - (7 * 24 * 60 * 60 * 1000);
+    
+    // Clean old spam detection data
+    Object.keys(botData.spamDetection).forEach(key => {
+        botData.spamDetection[key] = botData.spamDetection[key].filter(time => now - time < 3600000); // Keep 1 hour
+        if (botData.spamDetection[key].length === 0) {
+            delete botData.spamDetection[key];
+        }
+    });
+    
+    // Clean old suspicious users (keep only last week)
+    botData.statistics.suspiciousUsers = botData.statistics.suspiciousUsers.filter(user => {
+        return new Date(user.timestamp).getTime() > oneWeekAgo;
+    });
+    
+    saveData(botData);
+}
+
+// Enhanced error handling
 bot.on('polling_error', (error) => {
     console.error('Polling error:', error);
+    
+    // Notify main admin about critical errors
+    if (error.code === 'EFATAL') {
+        bot.sendMessage(botData.mainAdmin, 
+            `🚨 **Bot Error Critical!**\n\n` +
+            `Error: ${error.message}\n` +
+            `Time: ${new Date().toISOString()}\n\n` +
+            `Bot mungkin perlu restart!`
+        , { parse_mode: 'Markdown' }).catch(console.error);
+    }
 });
 
-bot.on('error', (error) => {
-    console.error('Bot error:', error);
+// Handle webhook errors
+bot.on('webhook_error', (error) => {
+    console.error('Webhook error:', error);
 });
+
+// Initialize bot
+function initializeBot() {
+    console.log('🚀 Bot Protection AI Started!');
+    console.log('📊 Data loaded:', {
+        admins: botData.admins.length,
+        groups: botData.groups.length,
+        detectionEnabled: botData.detectionEnabled
+    });
+    
+    // Schedule daily report
+    scheduleDailyReport();
+    
+    // Schedule cleanup every hour
+    setInterval(cleanupOldData, 60 * 60 * 1000);
+    
+    // Send startup notification to main admin
+    bot.sendMessage(botData.mainAdmin, 
+        `🤖 **Bot Protection AI Started!**\n\n` +
+        `✅ Status: Online\n` +
+        `🔍 Detection: ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}\n` +
+        `👥 Admins: ${botData.admins.length}\n` +
+        `🏢 Groups: ${botData.groups.length}\n` +
+        `📅 Time: ${new Date().toLocaleString()}`
+    , { parse_mode: 'Markdown' }).catch(console.error);
+}
+
+// Enhanced session management
+function getOrCreateSession(groupId) {
+    if (!botData.sessions[groupId]) {
+        botData.sessions[groupId] = `group_${groupId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        saveData(botData);
+    }
+    return botData.sessions[groupId];
+}
+
+// Better image processing with multiple attempts
+async function processImage(photoArray) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const fileId = photoArray[photoArray.length - 1].file_id;
+            const file = await bot.getFile(fileId);
+            
+            // Download file
+            const response = await axios.get(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`, {
+                responseType: 'arraybuffer'
+            });
+            
+            const buffer = Buffer.from(response.data);
+            
+            // Upload to ImgBB
+            const imageUrl = await uploadToImgBB(buffer);
+            
+            if (imageUrl) {
+                return imageUrl;
+            }
+        } catch (error) {
+            console.error(`Image processing attempt ${attempt + 1} failed:`, error);
+            if (attempt === 2) {
+                throw error;
+            }
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+    return null;
+}
+
+// Enhanced AI decision with context
+async function analyzeWithContext(text, imageUrl, groupId, userId, messageType = 'text') {
+    try {
+        const session = getOrCreateSession(groupId);
+        const userBehavior = analyzeUserBehavior(userId, groupId);
+        
+        const contextPrompt = `Kamu adalah AI Security Bot untuk grup Telegram. Analisis konten ini dengan konteks user behavior.
+
+USER CONTEXT:
+- Peringatan sebelumnya: ${userBehavior.warningCount}
+- Spam count: ${userBehavior.spamCount}
+- Suspicion score: ${userBehavior.suspicionScore}
+- Type: ${messageType}
+
+DETEKSI:
+- Konten 18+, SARA, hate speech, scam, phishing
+- Spam, flood, bot behavior
+- Gambar tidak pantas, kekerasan, pornografi
+- Link mencurigakan, malware
+- Perilaku toxic, bullying
+
+KEPUTUSAN TERSEDIA:
+- SAFE: Konten aman
+- DELETE_MESSAGE: Hapus pesan berbahaya
+- WARN_USER: Beri peringatan
+- RESTRICT_USER: Batasi user (1h-30d)
+- BAN_USER: Ban permanen untuk konten sangat berbahaya
+
+WAJIB FORMAT JSON:
+{
+  "decision": "SAFE/DELETE_MESSAGE/WARN_USER/RESTRICT_USER/BAN_USER",
+  "reason": "alasan spesifik dan jelas",
+  "severity": 1-10,
+  "confidence": 1-10,
+  "restriction_duration": "1h/6h/1d/7d/30d",
+  "message_to_user": "pesan untuk user",
+  "threat_type": "spam/18+/sara/hate/scam/toxic/malware/safe"
+}
+
+Konten: ${text}`;
+
+        const apiUrl = imageUrl 
+            ? `https://api.ryzumi.vip/api/ai/v2/chatgpt?text=${encodeURIComponent(contextPrompt)}&imageUrl=${encodeURIComponent(imageUrl)}&session=${session}`
+            : `https://api.ryzumi.vip/api/ai/v2/chatgpt?text=${encodeURIComponent(contextPrompt)}&session=${session}`;
+
+        const response = await axios.get(apiUrl, { timeout: 15000 });
+        
+        if (response.data && response.data.result) {
+            try {
+                // Extract JSON from response
+                const jsonMatch = response.data.result.match(/\{[\s\S]*?\}/);
+                if (jsonMatch) {
+                    const decision = JSON.parse(jsonMatch[0]);
+                    
+                    // Validate decision structure
+                    if (decision.decision && decision.reason && decision.severity) {
+                        return decision;
+                    }
+                }
+            } catch (parseError) {
+                console.error('JSON parse error:', parseError);
+            }
+        }
+        
+        // Fallback decision
+        return {
+            decision: 'SAFE',
+            reason: 'Tidak dapat menganalisis dengan benar',
+            severity: 1,
+            confidence: 1,
+            threat_type: 'safe'
+        };
+        
+    } catch (error) {
+        console.error('Error in AI analysis:', error);
+        return null;
+    }
+}
+
+// Start the bot
+initializeBot();
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-    console.log('Shutting down bot...');
-    db.close((err) => {
-        if (err) {
-            console.error('Error closing database:', err);
-        } else {
-            console.log('Database connection closed.');
-        }
+    console.log('🛑 Bot shutting down...');
+    
+    // Send shutdown notification
+    bot.sendMessage(botData.mainAdmin, 
+        '🔴 **Bot Protection AI Shutdown**\n\n' +
+        '⏰ Time: ' + new Date().toLocaleString()
+    , { parse_mode: 'Markdown' }).catch(console.error);
+    
+    // Save data before exit
+    saveData(botData);
+    
+    setTimeout(() => {
         process.exit(0);
-    });
+    }, 2000);
 });
 
-// Start message
-console.log('🤖 Bot Security started successfully!');
-console.log('📊 Database initialized');
-console.log('🔄 Daily reports scheduled');
-console.log('🛡️ AI Security monitoring active');
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    
+    // Notify admin about critical error
+    bot.sendMessage(botData.mainAdmin, 
+        `🚨 **Critical Error!**\n\n` +
+        `${error.message}\n\n` +
+        `Time: ${new Date().toISOString()}`
+    , { parse_mode: 'Markdown' }).catch(console.error);
+});
 
-// Package.json requirements
-/*
-{
-  "name": "telegram-security-bot",
-  "version": "1.0.0",
-  "description": "Advanced Telegram Security Bot with AI Analysis",
-  "main": "bot.js",
-  "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js"
-  },
-  "dependencies": {
-    "node-telegram-bot-api": "^0.61.0",
-    "sqlite3": "^5.1.6",
-    "axios": "^1.4.0",
-    "form-data": "^4.0.0",
-    "node-cron": "^3.0.2",
-    "fs": "^0.0.1-security",
-    "path": "^0.12.7"
-  },
-  "keywords": ["telegram", "bot", "security", "ai", "moderation"],
-  "author": "Your Name",
-  "license": "MIT"
-}
-*/
+console.log('🎯 Telegram Protection Bot is running!');
+console.log('📱 Features: AI Detection, Auto Moderation, Daily Reports');
+console.log('🛡️ Ready to protect your groups!');
 
-// Installation instructions:
-/*
-1. npm install
-2. Buat bot baru di @BotFather dan dapatkan token
-3. Dapatkan API key dari ImgBB.com
-4. Ganti variabel BOT_TOKEN, IMGBB_API_KEY, dan MAIN_ADMIN_ID
-5. npm start
-*/
+module.exports = bot;
