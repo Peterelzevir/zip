@@ -1,5 +1,6 @@
 //
 //
+//
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs').promises;
 const crypto = require('crypto');
@@ -757,13 +758,16 @@ bot.action('add_admin', async (ctx) => {
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Cancel', 'cancel_session')],
                 [Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')]
             ])
         }
     );
 
-    // Set session untuk user ini
-    userSessions.set(ctx.from.id, { waitingForAdmin: true });
+    userSessions.set(ctx.from.id, { 
+        waitingForAdmin: true,
+        timestamp: Date.now() 
+    });
 });
 
 bot.action('remove_admin', async (ctx) => {
@@ -843,13 +847,16 @@ bot.action('add_group', async (ctx) => {
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Cancel', 'cancel_session')],
                 [Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]
             ])
         }
     );
 
-    // Set session untuk user ini
-    userSessions.set(ctx.from.id, { waitingForGroup: true });
+    userSessions.set(ctx.from.id, { 
+        waitingForGroup: true,
+        timestamp: Date.now() 
+    });
 });
 
 bot.action('remove_group', async (ctx) => {
@@ -1150,18 +1157,29 @@ bot.action(/^remove_group_(.+)$/, async (ctx) => {
 
 // Handle text messages for admin/group addition
 bot.on('text', async (ctx) => {
-    // Skip jika bukan private chat atau bukan admin
-    if (ctx.chat.type !== 'private' || !isAdmin(ctx.from.id)) return;
-
+    if (ctx.chat.type !== 'private') return;
+    
     const text = ctx.message.text;
     const userId = ctx.from.id;
+    
+    console.log(`📨 Received text from ${userId}: "${text}"`);
+    
+    if (!isAdmin(userId)) {
+        console.log(`❌ User ${userId} is not admin`);
+        return;
+    }
+    
     const session = userSessions.get(userId);
+    console.log(`📋 Session for ${userId}:`, session);
 
-    if (!session) return; // Tidak ada session aktif
+    if (!session) {
+        console.log(`❌ No active session for ${userId}`);
+        return;
+    }
 
     try {
-        // Handle admin addition
         if (session.waitingForAdmin) {
+            console.log(`➕ Processing admin addition for ${userId}`);
             const newAdminId = parseInt(text);
             
             if (isNaN(newAdminId)) {
@@ -1176,18 +1194,17 @@ bot.on('text', async (ctx) => {
 
             if (botData.admins.includes(newAdminId)) {
                 await ctx.reply(
-                    '⚠️ **User Already Admin**\n\n' +
+                    '⚠️ **User  Already Admin**\n\n' +
                     'This user is already an admin'
                 );
                 return;
             }
 
-            // Tambahkan admin baru
             botData.admins.push(newAdminId);
             await saveData();
             
-            // Hapus session
             userSessions.delete(userId);
+            console.log(`✅ Admin ${newAdminId} added successfully`);
 
             await ctx.reply(
                 `✅ **Admin Added Successfully**\n\n` +
@@ -1199,8 +1216,8 @@ bot.on('text', async (ctx) => {
             );
         }
 
-        // Handle group addition
         if (session.waitingForGroup) {
+            console.log(`➕ Processing group addition for ${userId}`);
             const groupId = parseInt(text);
             
             if (isNaN(groupId) || groupId >= 0) {
@@ -1224,17 +1241,14 @@ bot.on('text', async (ctx) => {
                 return;
             }
 
-            // Try to get group info
             let groupName = 'Unknown Group';
             try {
                 const chat = await bot.telegram.getChat(groupId);
                 groupName = chat.title || chat.username || 'Unknown Group';
             } catch (error) {
                 console.log(`Could not get info for group ${groupId}, using default name`);
-                // Tidak perlu throw error, cukup gunakan nama default
             }
 
-            // Tambahkan group baru
             botData.groups.push({
                 id: groupId,
                 name: groupName,
@@ -1244,8 +1258,8 @@ bot.on('text', async (ctx) => {
             
             await saveData();
             
-            // Hapus session
             userSessions.delete(userId);
+            console.log(`✅ Group ${groupId} added successfully`);
 
             await ctx.reply(
                 `✅ **Group Added Successfully**\n\n` +
@@ -1260,7 +1274,6 @@ bot.on('text', async (ctx) => {
     } catch (error) {
         console.error('Error handling text input:', error);
         
-        // Hapus session jika ada error
         userSessions.delete(userId);
         
         await ctx.reply(
@@ -1271,6 +1284,59 @@ bot.on('text', async (ctx) => {
         );
     }
 });
+
+bot.command('debug', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    const userId = ctx.from.id;
+    const session = userSessions.get(userId);
+    
+    let debugInfo = `🔍 **Debug Information**\n\n`;
+    debugInfo += `👤 **Your ID:** \`${userId}\`\n`;
+    debugInfo += `👑 **Is Admin:** ${isAdmin(userId) ? 'Yes ✅' : 'No ❌'}\n`;
+    debugInfo += `📋 **Active Session:** ${session ? 'Yes ✅' : 'No ❌'}\n`;
+    
+    if (session) {
+        debugInfo += `\n**Session Details:**\n`;
+        debugInfo += `• Waiting for Admin: ${session.waitingForAdmin || false}\n`;
+        debugInfo += `• Waiting for Group: ${session.waitingForGroup || false}\n`;
+        debugInfo += `• Created: ${session.timestamp ? formatTime(session.timestamp) : 'Unknown'}\n`;
+    }
+    
+    debugInfo += `\n📊 **Bot Stats:**\n`;
+    debugInfo += `• Total Admins: ${botData.admins.length}\n`;
+    debugInfo += `• Total Groups: ${botData.groups.length}\n`;
+    debugInfo += `• Active Sessions: ${userSessions.size}\n`;
+    
+    await ctx.reply(debugInfo, { parse_mode: 'Markdown' });
+});
+
+// Tambahkan Handler untuk Cancel Session
+
+bot.action('cancel_session', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    const userId = ctx.from.id;
+    if (userSessions.has(userId)) {
+        userSessions.delete(userId);
+        await ctx.answerCbQuery('❌ Action cancelled');
+    }
+    
+    await ctx.editMessageText(
+        `🤖 **Bot Keamanan Premium v2.0**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `🛡️ **Status Sistem:**\n` +
+        `🟢 Bot Online & Aktif\n` +
+        `🔍 Detection: ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}\n` +
+        `🏢 Groups: ${botData.groups.length} terdaftar\n` +
+        `👥 Admins: ${botData.admins.length} aktif\n\n` +
+        `⚡ Pilih menu untuk mengakses fitur:`,
+        {
+            parse_mode: 'Markdown',
+            ...getMainKeyboard()
+        }
+    );
+});
+
 
 // Enhanced error handling
 bot.catch(async (err, ctx) => {
