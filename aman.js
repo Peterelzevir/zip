@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const path = require('path');
 
 // Konfigurasi Bot
-const BOT_TOKEN = '7566921062:AAHJ4ij3ObZA9Rl8lfrhuZ5KTZaY82gKeHA'; // Ganti dengan token bot Anda
+const BOT_TOKEN = '7566921062:AAHr57DtMYwf9RpZVJe8qngsnyw0-NUChEA'; // Ganti dengan token bot Anda
 const MAIN_ADMIN = 5988451717; // Ganti dengan user ID admin utama
 const DATA_FILE = './bot_data.json';
 
