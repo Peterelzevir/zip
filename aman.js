@@ -213,7 +213,7 @@ bot.start(async (ctx) => {
     }
 
     const welcomeMessage = `
-🤖 **Bot Keamanan Premium v2.0**
+🤖 **Bot Keamanan Premium V5.0**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 👋 Selamat datang, **${ctx.from.first_name}**!
