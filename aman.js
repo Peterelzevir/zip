@@ -1,4 +1,5 @@
 //
+//
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs').promises;
 const crypto = require('crypto');
@@ -11,6 +12,8 @@ const DATA_FILE = './bot_data.json';
 
 // Inisialisasi Bot
 const bot = new Telegraf(BOT_TOKEN);
+
+const userSessions = new Map(); // Untuk menyimpan session user
 
 // Data Storage
 let botData = {
@@ -759,8 +762,8 @@ bot.action('add_admin', async (ctx) => {
         }
     );
 
-    // Set up listener for next message
-    ctx.session = { waitingForAdmin: true };
+    // Set session untuk user ini
+    userSessions.set(ctx.from.id, { waitingForAdmin: true });
 });
 
 bot.action('remove_admin', async (ctx) => {
@@ -845,7 +848,8 @@ bot.action('add_group', async (ctx) => {
         }
     );
 
-    ctx.session = { waitingForGroup: true };
+    // Set session untuk user ini
+    userSessions.set(ctx.from.id, { waitingForGroup: true });
 });
 
 bot.action('remove_group', async (ctx) => {
@@ -1146,89 +1150,208 @@ bot.action(/^remove_group_(.+)$/, async (ctx) => {
 
 // Handle text messages for admin/group addition
 bot.on('text', async (ctx) => {
+    // Skip jika bukan private chat atau bukan admin
     if (ctx.chat.type !== 'private' || !isAdmin(ctx.from.id)) return;
 
     const text = ctx.message.text;
+    const userId = ctx.from.id;
+    const session = userSessions.get(userId);
 
-    // Handle admin addition
-    if (ctx.session && ctx.session.waitingForAdmin) {
-        const userId = parseInt(text);
+    if (!session) return; // Tidak ada session aktif
+
+    try {
+        // Handle admin addition
+        if (session.waitingForAdmin) {
+            const newAdminId = parseInt(text);
+            
+            if (isNaN(newAdminId)) {
+                await ctx.reply(
+                    '❌ **Invalid User ID**\n\n' +
+                    'Please send a valid numeric User ID\n' +
+                    'Example: `123456789`',
+                    { parse_mode: 'Markdown' }
+                );
+                return;
+            }
+
+            if (botData.admins.includes(newAdminId)) {
+                await ctx.reply(
+                    '⚠️ **User Already Admin**\n\n' +
+                    'This user is already an admin'
+                );
+                return;
+            }
+
+            // Tambahkan admin baru
+            botData.admins.push(newAdminId);
+            await saveData();
+            
+            // Hapus session
+            userSessions.delete(userId);
+
+            await ctx.reply(
+                `✅ **Admin Added Successfully**\n\n` +
+                `👤 **New Admin:** \`${newAdminId}\`\n` +
+                `👥 **Total Admins:** ${botData.admins.length}\n` +
+                `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
+                `🔑 User now has admin access to bot`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+
+        // Handle group addition
+        if (session.waitingForGroup) {
+            const groupId = parseInt(text);
+            
+            if (isNaN(groupId) || groupId >= 0) {
+                await ctx.reply(
+                    '❌ **Invalid Group ID**\n\n' +
+                    'Group ID must be a negative number\n' +
+                    'Example: `-1001234567890`\n\n' +
+                    '🔍 To get Group ID:\n' +
+                    '• Add @userinfobot to your group\n' +
+                    '• Bot will show the group ID',
+                    { parse_mode: 'Markdown' }
+                );
+                return;
+            }
+
+            if (botData.groups.some(g => g.id === groupId)) {
+                await ctx.reply(
+                    '⚠️ **Group Already Registered**\n\n' +
+                    'This group is already in the whitelist'
+                );
+                return;
+            }
+
+            // Try to get group info
+            let groupName = 'Unknown Group';
+            try {
+                const chat = await bot.telegram.getChat(groupId);
+                groupName = chat.title || chat.username || 'Unknown Group';
+            } catch (error) {
+                console.log(`Could not get info for group ${groupId}, using default name`);
+                // Tidak perlu throw error, cukup gunakan nama default
+            }
+
+            // Tambahkan group baru
+            botData.groups.push({
+                id: groupId,
+                name: groupName,
+                addedAt: Date.now(),
+                active: true
+            });
+            
+            await saveData();
+            
+            // Hapus session
+            userSessions.delete(userId);
+
+            await ctx.reply(
+                `✅ **Group Added Successfully**\n\n` +
+                `🏢 **Group:** ${groupName}\n` +
+                `📋 **Group ID:** \`${groupId}\`\n` +
+                `🏢 **Total Groups:** ${botData.groups.length}\n` +
+                `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
+                `🛡️ Group is now protected by security bot`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+    } catch (error) {
+        console.error('Error handling text input:', error);
         
-        if (isNaN(userId)) {
-            await ctx.reply('❌ **Invalid User ID**\n\nPlease send a valid numeric User ID');
-            return;
-        }
-
-        if (botData.admins.includes(userId)) {
-            await ctx.reply('⚠️ **User Already Admin**\n\nThis user is already an admin');
-            return;
-        }
-
-        botData.admins.push(userId);
-        await saveData();
-        delete ctx.session.waitingForAdmin;
-
+        // Hapus session jika ada error
+        userSessions.delete(userId);
+        
         await ctx.reply(
-            `✅ **Admin Added Successfully**\n\n` +
-            `👤 **New Admin:** \`${userId}\`\n` +
-            `👥 **Total Admins:** ${botData.admins.length}\n` +
-            `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
-            `🔑 User now has admin access to bot`,
-            { parse_mode: 'Markdown' }
-        );
-    }
-
-    // Handle group addition
-    if (ctx.session && ctx.session.waitingForGroup) {
-        const groupId = parseInt(text);
-        
-        if (isNaN(groupId) || groupId >= 0) {
-            await ctx.reply('❌ **Invalid Group ID**\n\nGroup ID must be a negative number\nExample: -1001234567890');
-            return;
-        }
-
-        if (botData.groups.some(g => g.id === groupId)) {
-            await ctx.reply('⚠️ **Group Already Registered**\n\nThis group is already in the whitelist');
-            return;
-        }
-
-        // Try to get group info
-        let groupName = 'Unknown Group';
-        try {
-            const chat = await bot.telegram.getChat(groupId);
-            groupName = chat.title || chat.username || 'Unknown Group';
-        } catch (error) {
-            console.error('Error getting group info:', error);
-        }
-
-        botData.groups.push({
-            id: groupId,
-            name: groupName,
-            addedAt: Date.now(),
-            active: true
-        });
-        
-        await saveData();
-        delete ctx.session.waitingForGroup;
-
-        await ctx.reply(
-            `✅ **Group Added Successfully**\n\n` +
-            `🏢 **Group:** ${groupName}\n` +
-            `📋 **Group ID:** \`${groupId}\`\n` +
-            `🏢 **Total Groups:** ${botData.groups.length}\n` +
-            `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
-            `🛡️ Group is now protected by security bot`,
+            '❌ **Error Processing Request**\n\n' +
+            'Something went wrong. Please try again.\n' +
+            'If problem persists, contact main admin.',
             { parse_mode: 'Markdown' }
         );
     }
 });
 
 // Enhanced error handling
-bot.catch((err, ctx) => {
-    console.error('Bot error:', err);
-    if (ctx.from && isAdmin(ctx.from.id)) {
-        ctx.reply(`🚨 **Bot Error Detected**\n\nError: ${err.message}\nTime: ${formatTime(Date.now())}`);
+bot.catch(async (err, ctx) => {
+    console.error('==========================================');
+    console.error('🚨 BOT ERROR DETECTED:', new Date().toISOString());
+    console.error('Error:', err.message);
+    console.error('Stack:', err.stack);
+    console.error('Context:', ctx ? {
+        updateType: ctx.updateType,
+        chatId: ctx.chat?.id,
+        userId: ctx.from?.id,
+        messageId: ctx.message?.message_id
+    } : 'No context');
+    console.error('==========================================');
+
+    // Bersihkan session jika ada error
+    if (ctx?.from?.id) {
+        userSessions.delete(ctx.from.id);
     }
+
+    // Kirim notifikasi error ke admin (hanya jika konteks tersedia dan user adalah admin)
+    if (ctx?.from && isAdmin(ctx.from.id)) {
+        try {
+            await ctx.reply(
+                `🚨 **Bot Error Detected**\n\n` +
+                `⚠️ **Error:** ${err.message}\n` +
+                `🕐 **Time:** ${formatTime(Date.now())}\n` +
+                `🔄 **Status:** Bot continues running\n\n` +
+                `💡 Error has been logged and handled`,
+                { parse_mode: 'Markdown' }
+            );
+        } catch (replyError) {
+            console.error('Failed to send error notification:', replyError.message);
+        }
+    }
+
+    // Auto-recovery: coba save data jika memungkinkan
+    try {
+        await saveData();
+        console.log('✅ Data saved successfully after error');
+    } catch (saveError) {
+        console.error('❌ Failed to save data after error:', saveError.message);
+    }
+
+    // Jangan exit process, biarkan bot tetap berjalan
+    console.log('🔄 Bot continues running despite error...');
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('==========================================');
+    console.error('🚨 UNCAUGHT EXCEPTION:', new Date().toISOString());
+    console.error('Error:', error.message);
+    console.error('Stack:', error.stack);
+    console.error('==========================================');
+    
+    // Save data sebelum potentially crash
+    saveData().then(() => {
+        console.log('✅ Data saved before handling uncaught exception');
+    }).catch(saveError => {
+        console.error('❌ Failed to save data during uncaught exception:', saveError.message);
+    });
+
+    // Jangan exit, biarkan process tetap hidup
+    console.log('🔄 Process continues running...');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('==========================================');
+    console.error('🚨 UNHANDLED REJECTION:', new Date().toISOString());
+    console.error('Reason:', reason);
+    console.error('Promise:', promise);
+    console.error('==========================================');
+    
+    // Save data
+    saveData().then(() => {
+        console.log('✅ Data saved after unhandled rejection');
+    }).catch(saveError => {
+        console.error('❌ Failed to save data during unhandled rejection:', saveError.message);
+    });
+
+    console.log('🔄 Process continues running...');
 });
 
 // Startup function
@@ -1240,22 +1363,123 @@ const startBot = async () => {
         await loadData();
         console.log(`📊 Loaded data: ${botData.admins.length} admins, ${botData.groups.length} groups`);
         
-        // Start polling
-        await bot.launch();
+        // Test bot token
+        try {
+            const botInfo = await bot.telegram.getMe();
+            console.log(`🤖 Bot info loaded: @${botInfo.username}`);
+        } catch (tokenError) {
+            console.error('❌ Invalid bot token or network issue:', tokenError.message);
+            throw new Error('Bot token validation failed');
+        }
+        
+        // Start polling dengan error handling
+        await bot.launch({
+            dropPendingUpdates: true, // Skip pending updates
+            allowedUpdates: ['message', 'callback_query', 'chat_member'] // Only handle needed updates
+        });
+        
         console.log('✅ Bot started successfully!');
         console.log(`🤖 Bot username: @${bot.botInfo.username}`);
         console.log(`👑 Main admin: ${MAIN_ADMIN}`);
         console.log(`🛡️ Security features: ACTIVE`);
+        console.log(`🔧 Error handling: ENHANCED`);
         
-        // Graceful stop
-        process.once('SIGINT', () => bot.stop('SIGINT'));
-        process.once('SIGTERM', () => bot.stop('SIGTERM'));
+        // Graceful stop handlers
+        const gracefulStop = async (signal) => {
+            console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+            
+            try {
+                // Save data before stopping
+                await saveData();
+                console.log('✅ Data saved successfully');
+                
+                // Stop bot
+                bot.stop(signal);
+                console.log('✅ Bot stopped successfully');
+                
+                // Clear sessions
+                userSessions.clear();
+                console.log('✅ Sessions cleared');
+                
+                process.exit(0);
+            } catch (error) {
+                console.error('❌ Error during graceful shutdown:', error.message);
+                process.exit(1);
+            }
+        };
+        
+        process.once('SIGINT', () => gracefulStop('SIGINT'));
+        process.once('SIGTERM', () => gracefulStop('SIGTERM'));
         
     } catch (error) {
-        console.error('❌ Failed to start bot:', error);
-        process.exit(1);
+        console.error('❌ Failed to start bot:', error.message);
+        console.error('🔄 Retrying in 5 seconds...');
+        
+        // Retry after 5 seconds instead of exiting
+        setTimeout(() => {
+            startBot();
+        }, 5000);
     }
 };
+
+setInterval(async () => {
+    try {
+        const now = Date.now();
+        const oneDay = 24 * 60 * 60 * 1000;
+
+        // Clean old message hashes
+        let cleanedHashes = 0;
+        for (const [key, timestamp] of Object.entries(botData.messageHashes)) {
+            if (now - timestamp > oneDay) {
+                delete botData.messageHashes[key];
+                cleanedHashes++;
+            }
+        }
+
+        // Clean expired bans
+        let cleanedBans = 0;
+        for (const [userId, ban] of Object.entries(botData.bannedUsers)) {
+            if (ban.until < now) {
+                delete botData.bannedUsers[userId];
+                cleanedBans++;
+            }
+        }
+
+        // Clean old rate limits
+        const oldRateLimits = rateLimits.size;
+        rateLimits.clear();
+
+        // Clean old violations (older than 7 days)
+        const sevenDays = 7 * 24 * 60 * 60 * 1000;
+        let cleanedViolations = 0;
+        for (const [userId, violation] of Object.entries(botData.userViolations)) {
+            if (now - violation.lastViolation > sevenDays) {
+                delete botData.userViolations[userId];
+                cleanedViolations++;
+            }
+        }
+
+        // Clean old sessions (older than 1 hour)
+        const oneHour = 60 * 60 * 1000;
+        let cleanedSessions = 0;
+        for (const [userId, session] of userSessions.entries()) {
+            if (session.timestamp && (now - session.timestamp > oneHour)) {
+                userSessions.delete(userId);
+                cleanedSessions++;
+            }
+        }
+
+        await saveData();
+        
+        // Log cleanup stats setiap 10 menit
+        if (cleanedHashes > 0 || cleanedBans > 0 || cleanedViolations > 0 || cleanedSessions > 0) {
+            console.log(`🧹 Cleanup completed: ${cleanedHashes} hashes, ${cleanedBans} bans, ${cleanedViolations} violations, ${cleanedSessions} sessions, ${oldRateLimits} rate limits`);
+        }
+    } catch (error) {
+        console.error('❌ Error during periodic cleanup:', error.message);
+        // Jangan stop bot, cukup log error
+    }
+}, 60000); // Run every minute
 
 // Package.json dependencies info
 console.log(`
