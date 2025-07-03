@@ -1,4 +1,8 @@
-//
+// CODING BY @hiyaok ON TELEGRAM
+// U CAN ORDERS JASA BOT TO @hiyaok
+// TRUSTED JASA BOT TELEGRAM TERBAIK
+
+//modules pake telegraf
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs').promises;
 const crypto = require('crypto');
