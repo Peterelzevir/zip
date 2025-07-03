@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 // =================== CONFIGURATION ===================
-const BOT_TOKEN = '7559754047:AAEL93AChlINiJ7EDDppOQQwx3RxDC4BmVM'; // Ganti dengan token bot Anda
+const BOT_TOKEN = '7559754047:AAFkYOw7i6acsYJKfbS6dLKaJWojFL_6aig'; // Ganti dengan token bot Anda
 const ADMIN_IDS = [5988451717, 1290256714]; // Ganti dengan ID admin Anda
 const ADMIN_USERNAME = '@ninz888'; // Username admin
 const REQUIRED_CHANNEL = '@listprojec'; // Channel ID atau username
@@ -35,6 +35,9 @@ const DB_ADMIN = 'admin.json';
 
 // Supported languages
 const SUPPORTED_LANGUAGES = ['en', 'id', 'zh', 'uz', 'ru'];
+
+// In-memory locks to prevent double processing
+const processingLocks = new Set();
 
 // Initialize databases
 function initDatabase() {
@@ -73,7 +76,11 @@ function initDatabase() {
         { file: DB_ORDERS, default: {} },
         { file: DB_DEPOSITS, default: {} },
         { file: DB_SUPPORT, default: {} },
-        { file: DB_ADMIN, default: { active_supports: {}, reply_mode: {} } }
+        { file: DB_ADMIN, default: { 
+            active_supports: {}, 
+            reply_mode: {},
+            admin_states: {}
+        } }
     ];
 
     databases.forEach(db => {
@@ -83,10 +90,14 @@ function initDatabase() {
     });
 }
 
-// Database functions
+// Database functions with error handling
 function readDB(file) {
     try {
-        return JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (!fs.existsSync(file)) {
+            return {};
+        }
+        const data = fs.readFileSync(file, 'utf8');
+        return JSON.parse(data || '{}');
     } catch (error) {
         console.error(`Error reading ${file}:`, error);
         return {};
@@ -96,8 +107,10 @@ function readDB(file) {
 function writeDB(file, data) {
     try {
         fs.writeFileSync(file, JSON.stringify(data, null, 2));
+        return true;
     } catch (error) {
         console.error(`Error writing ${file}:`, error);
+        return false;
     }
 }
 
@@ -161,6 +174,8 @@ const translations = {
         support_active: "💬 Support session active. Send your message or type /back to end session.",
         please_topup: "💰 Please top up your wallet first to continue shopping.",
         session_ended: "✅ Session ended. Returning to main menu.",
+        out_of_stock: "❌ Out of stock. Please choose another option.",
+        already_processed: "⚠️ This request has already been processed.",
         months: {
             january: "January", february: "February", march: "March", april: "April",
             may: "May", june: "June", july: "July", august: "August", 
@@ -254,6 +269,8 @@ You can place an unlimited number of orders at the same time.
         support_active: "💬 Sesi dukungan aktif. Kirim pesan Anda atau ketik /back untuk mengakhiri sesi.",
         please_topup: "💰 Silakan isi dompet Anda terlebih dahulu untuk melanjutkan berbelanja.",
         session_ended: "✅ Sesi berakhir. Kembali ke menu utama.",
+        out_of_stock: "❌ Stok habis. Silakan pilih opsi lain.",
+        already_processed: "⚠️ Permintaan ini sudah diproses.",
         months: {
             january: "Januari", february: "Februari", march: "Maret", april: "April",
             may: "Mei", june: "Juni", july: "Juli", august: "Agustus", 
@@ -347,6 +364,8 @@ Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
         support_active: "💬 支持会话活跃。发送您的消息或输入 /back 结束会话。",
         please_topup: "💰 请先充值您的钱包以继续购物。",
         session_ended: "✅ 会话结束。返回主菜单。",
+        out_of_stock: "❌ 缺货。请选择其他选项。",
+        already_processed: "⚠️ 此请求已被处理。",
         months: {
             january: "一月", february: "二月", march: "三月", april: "四月",
             may: "五月", june: "六月", july: "七月", august: "八月", 
@@ -440,6 +459,8 @@ Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
         support_active: "💬 Yordam sessiyasi faol. Xabaringizni yuboring yoki sessiyani tugatish uchun /back yozing.",
         please_topup: "💰 Xarid qilishda davom etish uchun avval hamyoningizni to'ldiring.",
         session_ended: "✅ Sessiya tugadi. Asosiy menyuga qaytish.",
+        out_of_stock: "❌ Stok tugadi. Iltimos, boshqa variantni tanlang.",
+        already_processed: "⚠️ Bu so'rov allaqachon qayta ishlangan.",
         months: {
             january: "Yanvar", february: "Fevral", march: "Mart", april: "Aprel",
             may: "May", june: "Iyun", july: "Iyul", august: "Avgust", 
@@ -533,6 +554,8 @@ Siz bir vaqtning o'zida cheksiz miqdorda buyurtma berishingiz mumkin.
         support_active: "💬 Сессия поддержки активна. Отправьте ваше сообщение или введите /back для завершения сессии.",
         please_topup: "💰 Пожалуйста, сначала пополните кошелек для продолжения покупок.",
         session_ended: "✅ Сессия завершена. Возврат в главное меню.",
+        out_of_stock: "❌ Товар закончился. Пожалуйста, выберите другой вариант.",
+        already_processed: "⚠️ Этот запрос уже обработан.",
         months: {
             january: "Январь", february: "Февраль", march: "Март", april: "Апрель",
             may: "Май", june: "Июнь", july: "Июль", august: "Август", 
@@ -605,6 +628,9 @@ function getUser(userId) {
 // Update user data
 function updateUser(userId, data) {
     const users = readDB(DB_USERS);
+    if (!users[userId]) {
+        users[userId] = getUser(userId);
+    }
     users[userId] = { ...users[userId], ...data };
     writeDB(DB_USERS, users);
 }
@@ -859,7 +885,15 @@ function getStatistics() {
 // Format statistics message
 function formatStatistics(userId) {
     const stats = getStatistics();
-    const currentTime = new Date().toLocaleString();
+    const currentTime = new Date().toLocaleString('en-US', {
+        timeZone: 'UTC',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
     
     let message = `📊 ${getText(userId, 'total_users')} ${stats.totalUsers} pcs\n`;
     message += `👥 ${getText(userId, 'group_orders')} ${stats.totalGroupOrders} pcs\n\n`;
@@ -878,9 +912,31 @@ function formatStatistics(userId) {
     message += `📅 Channels: ${stats.products.channels['2023'] ? Object.values(stats.products.channels['2023']).reduce((sum, month) => sum + month.stock, 0) : 0} pcs\n`;
     message += `💰 Price: ${stats.products.channels['2023'] ? stats.products.channels['2023'].january.price : DEFAULT_PRICES.channels} USDT\n\n`;
     
-    message += `🕒 Last updated: ${currentTime}`;
+    message += `🕒 Updated: ${currentTime} UTC`;
     
     return message;
+}
+
+// Safe message edit function
+async function safeEditMessage(chatId, messageId, text, options = {}) {
+    try {
+        await bot.editMessageText(text, {
+            chat_id: chatId,
+            message_id: messageId,
+            ...options
+        });
+        return true;
+    } catch (error) {
+        console.log('Could not edit message:', error.message);
+        // Fallback to sending new message
+        try {
+            await bot.sendMessage(chatId, text, options);
+            return true;
+        } catch (sendError) {
+            console.error('Could not send message:', sendError.message);
+            return false;
+        }
+    }
 }
 
 // Send welcome message with description
@@ -988,7 +1044,21 @@ bot.on('callback_query', async (query) => {
     const data = query.data;
     const messageId = query.message.message_id;
     
+    // Prevent double processing
+    const lockKey = `${userId}_${data}_${messageId}`;
+    if (processingLocks.has(lockKey)) {
+        bot.answerCallbackQuery(query.id, { text: getText(userId, 'already_processed') });
+        return;
+    }
+    
+    processingLocks.add(lockKey);
+    
     try {
+        // Clear lock after processing
+        setTimeout(() => {
+            processingLocks.delete(lockKey);
+        }, 3000);
+        
         // Handle language selection
         if (data.startsWith('lang_')) {
             const lang = data.split('_')[1];
@@ -1000,19 +1070,13 @@ bot.on('callback_query', async (query) => {
             
             updateUser(userId, { language: lang, language_set: true });
             
-            try {
-                await bot.editMessageText(getText(userId, 'welcome'), {
-                    chat_id: userId,
-                    message_id: messageId,
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '✅ Language Selected', callback_data: 'lang_selected' }]
-                        ]
-                    }
-                });
-            } catch (editError) {
-                console.log('Could not edit message:', editError.message);
-            }
+            await safeEditMessage(userId, messageId, getText(userId, 'welcome'), {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '✅ Language Selected', callback_data: 'lang_selected' }]
+                    ]
+                }
+            });
             
             setTimeout(async () => {
                 try {
@@ -1048,14 +1112,7 @@ bot.on('callback_query', async (query) => {
         if (data === 'check_membership') {
             const isMember = await checkChannelMembership(userId);
             if (isMember) {
-                try {
-                    await bot.editMessageText(getText(userId, 'main_menu'), {
-                        chat_id: userId,
-                        message_id: messageId
-                    });
-                } catch (editError) {
-                    console.log('Could not edit message:', editError.message);
-                }
+                await safeEditMessage(userId, messageId, getText(userId, 'main_menu'));
                 setTimeout(async () => {
                     try {
                         await bot.deleteMessage(userId, messageId);
@@ -1072,15 +1129,7 @@ bot.on('callback_query', async (query) => {
         
         // Handle topup button
         if (data === 'show_topup') {
-            try {
-                await bot.editMessageText(getText(userId, 'select_amount'), {
-                    chat_id: userId,
-                    message_id: messageId,
-                    ...getTopupKeyboard(userId)
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, getText(userId, 'select_amount'), getTopupKeyboard(userId));
-            }
+            await safeEditMessage(userId, messageId, getText(userId, 'select_amount'), getTopupKeyboard(userId));
             bot.answerCallbackQuery(query.id);
             return;
         }
@@ -1090,14 +1139,7 @@ bot.on('callback_query', async (query) => {
             const amount = data.split('_')[1];
             
             if (amount === 'custom') {
-                try {
-                    await bot.editMessageText(getText(userId, 'custom_amount'), {
-                        chat_id: userId,
-                        message_id: messageId
-                    });
-                } catch (editError) {
-                    bot.sendMessage(userId, getText(userId, 'custom_amount'));
-                }
+                await safeEditMessage(userId, messageId, getText(userId, 'custom_amount'));
                 updateUser(userId, { state: 'waiting_custom_amount' });
                 bot.answerCallbackQuery(query.id);
                 return;
@@ -1106,15 +1148,7 @@ bot.on('callback_query', async (query) => {
             const numAmount = parseInt(amount);
             if (numAmount >= 1) {
                 updateUser(userId, { pending_deposit: numAmount });
-                try {
-                    await bot.editMessageText(getText(userId, 'network_select'), {
-                        chat_id: userId,
-                        message_id: messageId,
-                        ...getNetworkKeyboard(userId)
-                    });
-                } catch (editError) {
-                    bot.sendMessage(userId, getText(userId, 'network_select'), getNetworkKeyboard(userId));
-                }
+                await safeEditMessage(userId, messageId, getText(userId, 'network_select'), getNetworkKeyboard(userId));
             }
             bot.answerCallbackQuery(query.id);
             return;
@@ -1130,25 +1164,13 @@ bot.on('callback_query', async (query) => {
             message += `${getText(userId, 'with_amount')} ${amount} USDT\n\n`;
             message += getText(userId, 'send_proof');
             
-            try {
-                await bot.editMessageText(message, {
-                    chat_id: userId,
-                    message_id: messageId,
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: getText(userId, 'confirm'), callback_data: 'confirm_transfer' }]
-                        ]
-                    }
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, message, {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: getText(userId, 'confirm'), callback_data: 'confirm_transfer' }]
-                        ]
-                    }
-                });
-            }
+            await safeEditMessage(userId, messageId, message, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'confirm'), callback_data: 'confirm_transfer' }]
+                    ]
+                }
+            });
             
             updateUser(userId, { state: 'waiting_transfer_proof', selected_network: network });
             bot.answerCallbackQuery(query.id);
@@ -1157,14 +1179,7 @@ bot.on('callback_query', async (query) => {
         
         // Handle transfer confirmation
         if (data === 'confirm_transfer') {
-            try {
-                await bot.editMessageText(getText(userId, 'send_proof'), {
-                    chat_id: userId,
-                    message_id: messageId
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, getText(userId, 'send_proof'));
-            }
+            await safeEditMessage(userId, messageId, getText(userId, 'send_proof'));
             updateUser(userId, { state: 'waiting_transfer_proof' });
             bot.answerCallbackQuery(query.id);
             return;
@@ -1175,15 +1190,7 @@ bot.on('callback_query', async (query) => {
             const type = data.split('_')[1];
             updateUser(userId, { shop_type: type });
             
-            try {
-                await bot.editMessageText(getText(userId, 'select_year'), {
-                    chat_id: userId,
-                    message_id: messageId,
-                    ...getYearKeyboard(type)
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, getText(userId, 'select_year'), getYearKeyboard(type));
-            }
+            await safeEditMessage(userId, messageId, getText(userId, 'select_year'), getYearKeyboard(type));
             bot.answerCallbackQuery(query.id);
             return;
         }
@@ -1195,15 +1202,7 @@ bot.on('callback_query', async (query) => {
             
             updateUser(userId, { shop_year: year });
             
-            try {
-                await bot.editMessageText(getText(userId, 'select_month'), {
-                    chat_id: userId,
-                    message_id: messageId,
-                    ...getMonthKeyboard(userId, user.shop_type, year)
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, getText(userId, 'select_month'), getMonthKeyboard(userId, user.shop_type, year));
-            }
+            await safeEditMessage(userId, messageId, getText(userId, 'select_month'), getMonthKeyboard(userId, user.shop_type, year));
             bot.answerCallbackQuery(query.id);
             return;
         }
@@ -1213,17 +1212,19 @@ bot.on('callback_query', async (query) => {
             const month = data.split('_')[1];
             const user = getUser(userId);
             
-            updateUser(userId, { shop_month: month });
+            // Check stock first
+            const products = readDB(DB_PRODUCTS);
+            const product = products[user.shop_type][user.shop_year][month];
             
-            try {
-                await bot.editMessageText(getText(userId, 'enter_username'), {
-                    chat_id: userId,
-                    message_id: messageId
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, getText(userId, 'enter_username'));
+            if (product.stock <= 0) {
+                bot.answerCallbackQuery(query.id, { text: getText(userId, 'out_of_stock'), show_alert: true });
+                clearUserState(userId);
+                return;
             }
             
+            updateUser(userId, { shop_month: month });
+            
+            await safeEditMessage(userId, messageId, getText(userId, 'enter_username'));
             updateUser(userId, { state: 'waiting_username' });
             bot.answerCallbackQuery(query.id);
             return;
@@ -1235,18 +1236,17 @@ bot.on('callback_query', async (query) => {
             const products = readDB(DB_PRODUCTS);
             const product = products[user.shop_type][user.shop_year][user.shop_month];
             
+            // Check stock again
+            if (product.stock <= 0) {
+                bot.answerCallbackQuery(query.id, { text: getText(userId, 'out_of_stock'), show_alert: true });
+                clearUserState(userId);
+                return;
+            }
+            
             let message = `💰 ${getText(userId, 'group_price')} ${product.price} USDT\n\n`;
             message += getText(userId, 'enter_count');
             
-            try {
-                await bot.editMessageText(message, {
-                    chat_id: userId,
-                    message_id: messageId
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, message);
-            }
-            
+            await safeEditMessage(userId, messageId, message);
             updateUser(userId, { state: 'waiting_quantity' });
             bot.answerCallbackQuery(query.id);
             return;
@@ -1254,14 +1254,7 @@ bot.on('callback_query', async (query) => {
         
         if (data === 'cancel_username') {
             clearUserState(userId);
-            try {
-                await bot.editMessageText(getText(userId, 'main_menu'), {
-                    chat_id: userId,
-                    message_id: messageId
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
-            }
+            await safeEditMessage(userId, messageId, getText(userId, 'main_menu'));
             bot.answerCallbackQuery(query.id);
             return;
         }
@@ -1283,14 +1276,7 @@ bot.on('callback_query', async (query) => {
                     message += `📅 ${new Date(order.created_at).toLocaleDateString()}\n\n`;
                 });
                 
-                try {
-                    await bot.editMessageText(message, {
-                        chat_id: userId,
-                        message_id: messageId
-                    });
-                } catch (editError) {
-                    bot.sendMessage(userId, message);
-                }
+                await safeEditMessage(userId, messageId, message);
             }
             bot.answerCallbackQuery(query.id);
             return;
@@ -1298,25 +1284,13 @@ bot.on('callback_query', async (query) => {
         
         // Handle statistics update
         if (data === 'update_stats') {
-            try {
-                await bot.editMessageText(formatStatistics(userId), {
-                    chat_id: userId,
-                    message_id: messageId,
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: getText(userId, 'update'), callback_data: 'update_stats' }]
-                        ]
-                    }
-                });
-            } catch (editError) {
-                bot.sendMessage(userId, formatStatistics(userId), {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: getText(userId, 'update'), callback_data: 'update_stats' }]
-                        ]
-                    }
-                });
-            }
+            await safeEditMessage(userId, messageId, formatStatistics(userId), {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'update'), callback_data: 'update_stats' }]
+                    ]
+                }
+            });
             bot.answerCallbackQuery(query.id);
             return;
         }
@@ -1326,7 +1300,7 @@ bot.on('callback_query', async (query) => {
             const depositId = data.split('_')[2];
             const deposits = readDB(DB_DEPOSITS);
             
-            if (deposits[depositId]) {
+            if (deposits[depositId] && deposits[depositId].status === 'pending') {
                 const deposit = deposits[depositId];
                 const targetUser = getUser(deposit.userId);
                 
@@ -1344,17 +1318,13 @@ bot.on('callback_query', async (query) => {
                 // Notify user
                 bot.sendMessage(deposit.userId, `✅ Your deposit of ${deposit.amount} USDT has been approved!`);
                 
-                // Update admin message
-                try {
-                    await bot.editMessageText(`✅ Deposit approved!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`, {
-                        chat_id: userId,
-                        message_id: messageId
-                    });
-                } catch (editError) {
-                    console.log('Could not edit admin message:', editError.message);
-                }
+                // Send new message to admin instead of editing
+                bot.sendMessage(userId, `✅ Deposit approved!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`);
+                
+                bot.answerCallbackQuery(query.id, { text: 'Deposit approved successfully!' });
+            } else {
+                bot.answerCallbackQuery(query.id, { text: 'Deposit already processed or not found!' });
             }
-            bot.answerCallbackQuery(query.id);
             return;
         }
         
@@ -1363,7 +1333,7 @@ bot.on('callback_query', async (query) => {
             const depositId = data.split('_')[2];
             const deposits = readDB(DB_DEPOSITS);
             
-            if (deposits[depositId]) {
+            if (deposits[depositId] && deposits[depositId].status === 'pending') {
                 const deposit = deposits[depositId];
                 
                 // Mark deposit as rejected
@@ -1374,17 +1344,13 @@ bot.on('callback_query', async (query) => {
                 // Notify user
                 bot.sendMessage(deposit.userId, `❌ Your deposit of ${deposit.amount} USDT has been rejected. Please contact support.`);
                 
-                // Update admin message
-                try {
-                    await bot.editMessageText(`❌ Deposit rejected!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`, {
-                        chat_id: userId,
-                        message_id: messageId
-                    });
-                } catch (editError) {
-                    console.log('Could not edit admin message:', editError.message);
-                }
+                // Send new message to admin instead of editing
+                bot.sendMessage(userId, `❌ Deposit rejected!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`);
+                
+                bot.answerCallbackQuery(query.id, { text: 'Deposit rejected successfully!' });
+            } else {
+                bot.answerCallbackQuery(query.id, { text: 'Deposit already processed or not found!' });
             }
-            bot.answerCallbackQuery(query.id);
             return;
         }
         
@@ -1393,8 +1359,17 @@ bot.on('callback_query', async (query) => {
             const targetUserId = data.split('_')[2];
             const adminData = readDB(DB_ADMIN);
             
+            // Ensure admin_states exists
+            if (!adminData.admin_states) {
+                adminData.admin_states = {};
+            }
+            
             // Set admin in reply mode
-            adminData.reply_mode[userId] = { target: parseInt(targetUserId), active: true };
+            adminData.admin_states[userId] = { 
+                target: parseInt(targetUserId), 
+                active: true,
+                state: 'admin_reply_mode'
+            };
             writeDB(DB_ADMIN, adminData);
             
             updateUser(userId, { state: 'admin_reply_mode' });
@@ -1415,15 +1390,7 @@ bot.on('callback_query', async (query) => {
         // Handle admin panel callbacks
         if (data.startsWith('admin_') && isAdmin(userId)) {
             if (data === 'admin_products') {
-                try {
-                    await bot.editMessageText('📦 Product Management\n\nSelect an option:', {
-                        chat_id: userId,
-                        message_id: messageId,
-                        ...getProductManagementKeyboard()
-                    });
-                } catch (editError) {
-                    bot.sendMessage(userId, '📦 Product Management\n\nSelect an option:', getProductManagementKeyboard());
-                }
+                await safeEditMessage(userId, messageId, '📦 Product Management\n\nSelect an option:', getProductManagementKeyboard());
             } else if (data === 'admin_users') {
                 const users = readDB(DB_USERS);
                 const totalUsers = Object.keys(users).length;
@@ -1447,35 +1414,106 @@ ${Object.values(users).slice(-5).map(user =>
     `${user.id}: ${user.balance} USDT (${user.language})`
 ).join('\n')}`;
                 
-                try {
-                    await bot.editMessageText(message, {
-                        chat_id: userId,
-                        message_id: messageId,
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text: '🔙 Back', callback_data: 'admin_back' }]
-                            ]
-                        }
+                await safeEditMessage(userId, messageId, message, {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🔙 Back', callback_data: 'admin_back' }]
+                        ]
+                    }
+                });
+            } else if (data === 'admin_stats') {
+                const users = readDB(DB_USERS);
+                const orders = readDB(DB_ORDERS);
+                const deposits = readDB(DB_DEPOSITS);
+                
+                const totalRevenue = Object.values(orders).reduce((sum, order) => sum + (order.total || 0), 0);
+                const pendingDeposits = Object.values(deposits).filter(d => d.status === 'pending').length;
+                const approvedDeposits = Object.values(deposits).filter(d => d.status === 'approved').length;
+                
+                const message = `📊 Detailed Statistics:
+
+👥 Users: ${Object.keys(users).length}
+💰 Total Revenue: ${totalRevenue} USDT
+📋 Total Orders: ${Object.keys(orders).length}
+💳 Pending Deposits: ${pendingDeposits}
+✅ Approved Deposits: ${approvedDeposits}
+
+Recent Orders:
+${Object.values(orders).slice(-3).map(order => 
+    `${order.id}: ${order.type} ${order.total} USDT`
+).join('\n')}`;
+                
+                await safeEditMessage(userId, messageId, message, {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🔙 Back', callback_data: 'admin_back' }]
+                        ]
+                    }
+                });
+            } else if (data === 'admin_orders') {
+                const orders = readDB(DB_ORDERS);
+                const recentOrders = Object.values(orders).slice(-5);
+                
+                let message = '📋 Recent Orders (Last 5):\n\n';
+                
+                recentOrders.forEach(order => {
+                    message += `🆔 ${order.id}\n`;
+                    message += `👤 User: ${order.userId}\n`;
+                    message += `📦 ${order.type} ${order.year} ${order.month}\n`;
+                    message += `🔢 Qty: ${order.quantity} | 💰 ${order.total} USDT\n`;
+                    message += `👤 @${order.username}\n\n`;
+                });
+                
+                await safeEditMessage(userId, messageId, message, {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🔙 Back', callback_data: 'admin_back' }]
+                        ]
+                    }
+                });
+            } else if (data === 'admin_deposits') {
+                const deposits = readDB(DB_DEPOSITS);
+                const pendingDeposits = Object.values(deposits).filter(d => d.status === 'pending');
+                
+                let message = `💰 Pending Deposits: ${pendingDeposits.length}\n\n`;
+                
+                pendingDeposits.slice(-5).forEach(deposit => {
+                    message += `🆔 ${deposit.id}\n`;
+                    message += `👤 User: ${deposit.userId}\n`;
+                    message += `💰 Amount: ${deposit.amount} USDT\n`;
+                    message += `🌐 Network: ${deposit.network}\n\n`;
+                });
+                
+                await safeEditMessage(userId, messageId, message, {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🔙 Back', callback_data: 'admin_back' }]
+                        ]
+                    }
+                });
+            } else if (data === 'admin_view_products') {
+                const products = readDB(DB_PRODUCTS);
+                let message = '📦 All Products:\n\n';
+                
+                Object.keys(products).forEach(type => {
+                    message += `📂 ${type.toUpperCase()}:\n`;
+                    Object.keys(products[type]).forEach(year => {
+                        const totalStock = Object.values(products[type][year]).reduce((sum, month) => sum + month.stock, 0);
+                        const price = products[type][year].january.price;
+                        message += `  ${year}: ${totalStock} pcs @ ${price} USDT\n`;
                     });
-                } catch (editError) {
-                    bot.sendMessage(userId, message, {
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text: '🔙 Back', callback_data: 'admin_back' }]
-                            ]
-                        }
-                    });
-                }
+                    message += '\n';
+                });
+                
+                await safeEditMessage(userId, messageId, message, {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🔙 Back', callback_data: 'admin_products' }]
+                        ]
+                    }
+                });
             } else if (data === 'admin_back') {
-                try {
-                    await bot.editMessageText('🔧 Admin Panel\n\nSelect an option:', {
-                        chat_id: userId,
-                        message_id: messageId,
-                        ...getAdminPanelKeyboard()
-                    });
-                } catch (editError) {
-                    bot.sendMessage(userId, '🔧 Admin Panel\n\nSelect an option:', getAdminPanelKeyboard());
-                }
+                await safeEditMessage(userId, messageId, '🔧 Admin Panel\n\nSelect an option:', getAdminPanelKeyboard());
             }
             
             bot.answerCallbackQuery(query.id);
@@ -1531,8 +1569,10 @@ bot.on('message', async (msg) => {
             if (text === '❌ Cancel Reply') {
                 clearUserState(userId);
                 const adminData = readDB(DB_ADMIN);
-                delete adminData.reply_mode[userId];
-                writeDB(DB_ADMIN, adminData);
+                if (adminData.admin_states && adminData.admin_states[userId]) {
+                    delete adminData.admin_states[userId];
+                    writeDB(DB_ADMIN, adminData);
+                }
                 
                 bot.sendMessage(userId, '✅ Reply mode cancelled.', {
                     reply_markup: { remove_keyboard: true }
@@ -1541,7 +1581,7 @@ bot.on('message', async (msg) => {
             }
             
             const adminData = readDB(DB_ADMIN);
-            const targetUserId = adminData.reply_mode[userId]?.target;
+            const targetUserId = adminData.admin_states?.[userId]?.target;
             
             if (targetUserId) {
                 // Send reply to user
@@ -1559,15 +1599,17 @@ bot.on('message', async (msg) => {
                 });
                 
                 // Clear admin reply mode
-                delete adminData.reply_mode[userId];
-                writeDB(DB_ADMIN, adminData);
+                if (adminData.admin_states) {
+                    delete adminData.admin_states[userId];
+                    writeDB(DB_ADMIN, adminData);
+                }
                 clearUserState(userId);
             }
             return;
         }
         
         // Handle back button
-        if (text === getText(userId, 'back')) {
+        if (text === getText(userId, 'back') || text === '/back') {
             clearUserState(userId);
             bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
             return;
@@ -1632,7 +1674,8 @@ bot.on('message', async (msg) => {
             
             // Check stock
             if (product.stock < quantity) {
-                bot.sendMessage(userId, `❌ Not enough stock. Available: ${product.stock} pcs`);
+                clearUserState(userId);
+                bot.sendMessage(userId, getText(userId, 'out_of_stock'));
                 return;
             }
             
@@ -1720,6 +1763,7 @@ bot.on('message', async (msg) => {
         
         // Handle main menu buttons
         if (text === getText(userId, 'wallet')) {
+            clearUserState(userId);
             let message = `💳 ${getText(userId, 'wallet')}\n\n`;
             message += `💰 ${getText(userId, 'balance')} ${user.balance} USDT\n`;
             message += `📋 ${getText(userId, 'your_orders')} ${user.orders} pcs\n`;
@@ -1828,7 +1872,8 @@ bot.on('message', async (msg) => {
             return;
         }
         
-        // If no matching handler, send help
+        // If no matching handler, clear state and send help
+        clearUserState(userId);
         bot.sendMessage(userId, getText(userId, 'help_text'));
         
     } catch (error) {
@@ -1906,15 +1951,322 @@ process.on('unhandledRejection', (reason, promise) => {
     // Don't crash, just log the error
 });
 
+// Admin command handlers
+bot.onText(/\/addstock (.+) (\d+) (\w+) (\d+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year, month, amount] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type]) {
+        bot.sendMessage(userId, '❌ Invalid type. Use: groups or channels');
+        return;
+    }
+    
+    if (!products[type][year]) {
+        bot.sendMessage(userId, '❌ Year not found. Add year first with /addyear');
+        return;
+    }
+    
+    if (!products[type][year][month]) {
+        bot.sendMessage(userId, '❌ Invalid month.');
+        return;
+    }
+    
+    products[type][year][month].stock += parseInt(amount);
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Added ${amount} stock to ${type} ${year} ${month}\nNew stock: ${products[type][year][month].stock}`);
+});
+
+bot.onText(/\/setprice (.+) (\d+) ([\d.]+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year, price] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type] || !products[type][year]) {
+        bot.sendMessage(userId, '❌ Type or year not found.');
+        return;
+    }
+    
+    const newPrice = parseFloat(price);
+    
+    // Update all months for that year
+    Object.keys(products[type][year]).forEach(month => {
+        products[type][year][month].price = newPrice;
+    });
+    
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Set price for ${type} ${year} to ${newPrice} USDT`);
+});
+
+bot.onText(/\/addyear (.+) (\d+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type]) {
+        bot.sendMessage(userId, '❌ Invalid type. Use: groups or channels');
+        return;
+    }
+    
+    if (products[type][year]) {
+        bot.sendMessage(userId, '❌ Year already exists.');
+        return;
+    }
+    
+    const defaultPrice = type === 'groups' ? DEFAULT_PRICES.groups : DEFAULT_PRICES.channels;
+    
+    products[type][year] = {
+        january: { stock: 0, price: defaultPrice },
+        february: { stock: 0, price: defaultPrice },
+        march: { stock: 0, price: defaultPrice },
+        april: { stock: 0, price: defaultPrice },
+        may: { stock: 0, price: defaultPrice },
+        june: { stock: 0, price: defaultPrice },
+        july: { stock: 0, price: defaultPrice },
+        august: { stock: 0, price: defaultPrice },
+        september: { stock: 0, price: defaultPrice },
+        october: { stock: 0, price: defaultPrice },
+        november: { stock: 0, price: defaultPrice },
+        december: { stock: 0, price: defaultPrice }
+    };
+    
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Added year ${year} for ${type} with default price ${defaultPrice} USDT`);
+});
+
+bot.onText(/\/removeyear (.+) (\d+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type] || !products[type][year]) {
+        bot.sendMessage(userId, '❌ Type or year not found.');
+        return;
+    }
+    
+    delete products[type][year];
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Removed year ${year} from ${type}`);
+});
+
+bot.onText(/\/products/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const products = readDB(DB_PRODUCTS);
+    let message = '📦 All Products:\n\n';
+    
+    Object.keys(products).forEach(type => {
+        message += `📂 ${type.toUpperCase()}:\n`;
+        Object.keys(products[type]).forEach(year => {
+            const totalStock = Object.values(products[type][year]).reduce((sum, month) => sum + month.stock, 0);
+            const price = products[type][year].january.price;
+            message += `  ${year}: ${totalStock} pcs @ ${price} USDT\n`;
+        });
+        message += '\n';
+    });
+    
+    bot.sendMessage(userId, message);
+});
+
+bot.onText(/\/users/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const users = readDB(DB_USERS);
+    const totalUsers = Object.keys(users).length;
+    let totalBalance = 0;
+    let totalDeposited = 0;
+    
+    Object.values(users).forEach(user => {
+        totalBalance += user.balance || 0;
+        totalDeposited += user.deposited || 0;
+    });
+    
+    const message = `👥 User Statistics:
+    
+Total Users: ${totalUsers}
+Total Balance: ${totalBalance} USDT
+Total Deposited: ${totalDeposited} USDT
+Average Balance: ${(totalBalance / totalUsers).toFixed(2)} USDT
+
+Recent Users:
+${Object.values(users).slice(-5).map(user => 
+    `${user.id}: ${user.balance} USDT (${user.language})`
+).join('\n')}`;
+    
+    bot.sendMessage(userId, message);
+});
+
+bot.onText(/\/balance (\d+) ([\d.]+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, targetUserId, amount] = match;
+    const newBalance = parseFloat(amount);
+    
+    updateUser(parseInt(targetUserId), { balance: newBalance });
+    
+    bot.sendMessage(userId, `✅ Set user ${targetUserId} balance to ${newBalance} USDT`);
+    bot.sendMessage(parseInt(targetUserId), `💰 Your balance has been updated to ${newBalance} USDT by admin.`);
+});
+
+bot.onText(/\/broadcast (.+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, message] = match;
+    const users = readDB(DB_USERS);
+    
+    let sent = 0;
+    let failed = 0;
+    
+    Object.keys(users).forEach(async (targetUserId) => {
+        try {
+            await bot.sendMessage(parseInt(targetUserId), `📢 Admin Broadcast:\n\n${message}`);
+            sent++;
+        } catch (error) {
+            failed++;
+        }
+    });
+    
+    setTimeout(() => {
+        bot.sendMessage(userId, `📊 Broadcast Results:\n✅ Sent: ${sent}\n❌ Failed: ${failed}`);
+    }, 2000);
+});
+
+bot.onText(/\/stats/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const users = readDB(DB_USERS);
+    const orders = readDB(DB_ORDERS);
+    const deposits = readDB(DB_DEPOSITS);
+    
+    const totalRevenue = Object.values(orders).reduce((sum, order) => sum + (order.total || 0), 0);
+    const pendingDeposits = Object.values(deposits).filter(d => d.status === 'pending').length;
+    const approvedDeposits = Object.values(deposits).filter(d => d.status === 'approved').length;
+    
+    const message = `📊 Detailed Statistics:
+
+👥 Users: ${Object.keys(users).length}
+💰 Total Revenue: ${totalRevenue} USDT
+📋 Total Orders: ${Object.keys(orders).length}
+💳 Pending Deposits: ${pendingDeposits}
+✅ Approved Deposits: ${approvedDeposits}
+
+Recent Orders:
+${Object.values(orders).slice(-3).map(order => 
+    `${order.id}: ${order.type} ${order.total} USDT`
+).join('\n')}`;
+    
+    bot.sendMessage(userId, message);
+});
+
+bot.onText(/\/orders/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const orders = readDB(DB_ORDERS);
+    const recentOrders = Object.values(orders).slice(-10);
+    
+    let message = '📋 Recent Orders (Last 10):\n\n';
+    
+    recentOrders.forEach(order => {
+        message += `🆔 ${order.id}\n`;
+        message += `👤 User: ${order.userId}\n`;
+        message += `📦 ${order.type} ${order.year} ${order.month}\n`;
+        message += `🔢 Qty: ${order.quantity} | 💰 ${order.total} USDT\n`;
+        message += `👤 @${order.username}\n`;
+        message += `📅 ${new Date(order.created_at).toLocaleString()}\n\n`;
+    });
+    
+    if (message.length > 4000) {
+        message = message.substring(0, 4000) + '...';
+    }
+    
+    bot.sendMessage(userId, message);
+});
+
 console.log('🚀 Bot started successfully!');
 console.log('📝 Configuration:');
 console.log(`- Channel: ${REQUIRED_CHANNEL}`);
 console.log(`- Channel ID: ${REQUIRED_CHANNEL_ID}`);
 console.log(`- Admin Username: ${ADMIN_USERNAME}`);
 console.log(`- Admin IDs: ${ADMIN_IDS.join(', ')}`);
-console.log(`- Group Price: $${DEFAULT_PRICES.groups}`);
-console.log(`- Channel Price: $${DEFAULT_PRICES.channels}`);
+console.log(`- Group Price: ${DEFAULT_PRICES.groups}`);
+console.log(`- Channel Price: ${DEFAULT_PRICES.channels}`);
 console.log('\n✅ Bot is ready to handle multiple users simultaneously!');
+console.log('\n📋 Available Admin Commands:');
+console.log('- /admin - Admin panel with inline buttons');
+console.log('- /addstock [type] [year] [month] [amount] - Add stock');
+console.log('- /setprice [type] [year] [price] - Set price for year');
+console.log('- /addyear [type] [year] - Add new year');
+console.log('- /removeyear [type] [year] - Remove year');
+console.log('- /products - View all products');
+console.log('- /users - View user statistics');
+console.log('- /balance [userId] [amount] - Set user balance');
+console.log('- /broadcast [message] - Send message to all users');
+console.log('- /stats - Detailed statistics');
+console.log('- /orders - View recent orders');
+console.log('\n🔧 Example Commands:');
+console.log('- /addstock groups 2024 january 100');
+console.log('- /setprice groups 2024 8.5');
+console.log('- /addyear groups 2025');
+console.log('- /balance 123456789 50.5');
+console.log('- /broadcast Hello everyone!');
 
 // Export bot for potential external use
 module.exports = bot;
