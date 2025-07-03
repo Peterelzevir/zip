@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 // =================== CONFIGURATION ===================
-const BOT_TOKEN = '7559754047:AAFkYOw7i6acsYJKfbS6dLKaJWojFL_6aig'; // Ganti dengan token bot Anda
+const BOT_TOKEN = '7559754047:AAEriBpZCuvOoVGmoxamCddB2iuge8a6rWQ'; // Ganti dengan token bot Anda
 const ADMIN_IDS = [5988451717, 1290256714]; // Ganti dengan ID admin Anda
 const ADMIN_USERNAME = '@ninz888'; // Username admin
 const REQUIRED_CHANNEL = '@listprojec'; // Channel ID atau username
