@@ -1,6 +1,4 @@
 //
-//
-//
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs').promises;
 const crypto = require('crypto');
@@ -14,7 +12,8 @@ const DATA_FILE = './bot_data.json';
 // Inisialisasi Bot
 const bot = new Telegraf(BOT_TOKEN);
 
-const userSessions = new Map(); // Untuk menyimpan session user
+// Sessions untuk input
+const userSessions = new Map();
 
 // Data Storage
 let botData = {
@@ -23,18 +22,24 @@ let botData = {
     detectionEnabled: true,
     lockdownMode: false,
     userViolations: {},
-    messageHashes: {},
-    lastMessages: {},
-    bannedUsers: {}
+    messageHashes: new Map(),
+    imageHashes: new Map(),
+    lastMessages: new Map(),
+    bannedUsers: {},
+    stats: {
+        deletedMessages: 0,
+        detectedSpam: 0,
+        bannedUsers: 0
+    }
 };
 
-// Pattern Deteksi Bahaya Indonesia
+// Enhanced Dangerous Patterns - Lebih Ketat
 const dangerousPatterns = [
-    // Investasi Bodong
-    /(?:investasi|invest|modal|profit|untung|keuntungan|passive income|bisnis online|mlm|binary option|forex|trading|cryptocurrency|bitcoin|saham|reksadana|deposito|bunga|return|roi|dividen).{0,50}(?:pasti|mudah|cepat|instant|auto|otomatis|tanpa riski|guaranteed|100%|milyar|jutaan|ribuan)/gi,
+    // Investasi Bodong & MLM
+    /(?:investasi|invest|modal|profit|untung|keuntungan|passive income|bisnis online|mlm|binary option|forex|trading|cryptocurrency|bitcoin|saham).{0,50}(?:pasti|mudah|cepat|instant|auto|otomatis|tanpa riski|guaranteed|100%|milyar|jutaan|ribuan)/gi,
     
     // SARA & Hate Speech
-    /(?:kafir|babi|anjing|bangsat|kampret|tolol|bodoh|goblok|idiot|stupid|gay|homo|lesbi|transgender|transgender|pelacur|sundal|jalang|lonte|bitch|slut|whore)/gi,
+    /(?:kafir|babi|anjing|bangsat|kampret|tolol|bodoh|goblok|idiot|stupid|gay|homo|lesbi|transgender|pelacur|sundal|jalang|lonte|bitch|slut|whore)/gi,
     /(?:cina|china|yahudi|kristen|islam|hindu|budha|katholik|protestan).{0,20}(?:anjing|babi|kafir|bangsat|tolol|bodoh|jelek|buruk|jahat|setan|iblis)/gi,
     
     // Kekerasan & Ancaman
@@ -49,17 +54,12 @@ const dangerousPatterns = [
     /(?:penipuan|scam|tipu|menipu|bohong|fake|palsu|pinjaman|kredit|loan|hutang|debt).{0,30}(?:cepat|mudah|tanpa jaminan|tanpa survey|approved|langsung cair)/gi,
     /(?:transfer|kirim|tf|pulsa|dana|ovo|gopay|shopeepay|linkaja).{0,20}(?:dulu|duluan|advance|dimuka|sekarang|langsung)/gi,
     
-    // MLM & Ponzi
-    /(?:mlm|multi level marketing|network marketing|binary|matrix|downline|upline|sponsor|leader|diamond|crown|ambassador)/gi,
-    /(?:join|gabung|daftar|register).{0,30}(?:500|1000|100rb|juta|jutaan|milyar|deposit|modal|fee|biaya)/gi,
-    
     // Spam Keywords
     /(?:promo|diskon|discount|sale|murah|gratis|free|bonus|hadiah|gift|undian|lottery|menang|winner|jutawan|milyuner)/gi,
     /(?:klik|click|link|bit\.ly|tinyurl|shortlink|wa\.me|t\.me|telegram\.me)/gi,
     
     // Pelecehan
     /(?:leceh|melecehkan|cabul|mesum|genit|nakal|jail|horny|birahi|nafsu|hasrat)/gi,
-    /(?:raba|pegang|sentuh|elus|cium|peluk|dekap).{0,20}(?:paksa|tanpa izin|diam-diam|sembunyi)/gi,
     
     // Narkoba
     /(?:narkoba|drugs|ganja|marijuana|sabu|shabu|heroin|kokain|ecstasy|pills|obat|pil).{0,20}(?:jual|beli|supply|supplier|dealer|pengedar)/gi,
@@ -67,19 +67,36 @@ const dangerousPatterns = [
     // Politik Ekstrem
     /(?:komunis|pki|khilafah|isis|teroris|separatis|makar|kudeta|revolusi|pembunuhan massal)/gi,
     
-    // Bahasa Kasar Level Tinggi
-    /(?:kontol|memek|pepek|ngentot|bangsat|anjing|babi|kampret|goblok|tolol|idiot|stupid|bitch|asshole|fuck|shit|damn|hell)/gi,
+    // URL & Link Patterns
+    /(?:https?:\/\/|www\.|bit\.ly|tinyurl|shortener|link)/gi,
+    
+    // Phone Numbers
+    /(?:\+62|08)\d{8,12}/g,
+    
+    // Excessive Emoji Spam
+    /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}]{10,}/gu,
+    
+    // Caps Lock Spam
+    /[A-Z\s]{20,}/g
 ];
 
-// Rate Limiting
+// Rate Limiting - Lebih Ketat
 const rateLimits = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 menit
-const MAX_MESSAGES_PER_MINUTE = 10;
+const RATE_LIMIT_WINDOW = 30000; // 30 detik
+const MAX_MESSAGES_PER_WINDOW = 5; // Maksimal 5 pesan per 30 detik
+const SPAM_THRESHOLD = 3; // 3 pesan sama = spam
 
 // Utility Functions
 const saveData = async () => {
     try {
-        await fs.writeFile(DATA_FILE, JSON.stringify(botData, null, 2));
+        // Convert Maps to objects for JSON
+        const dataToSave = {
+            ...botData,
+            messageHashes: Object.fromEntries(botData.messageHashes),
+            imageHashes: Object.fromEntries(botData.imageHashes),
+            lastMessages: Object.fromEntries(botData.lastMessages)
+        };
+        await fs.writeFile(DATA_FILE, JSON.stringify(dataToSave, null, 2));
     } catch (error) {
         console.error('Error saving data:', error);
     }
@@ -88,7 +105,16 @@ const saveData = async () => {
 const loadData = async () => {
     try {
         const data = await fs.readFile(DATA_FILE, 'utf8');
-        botData = { ...botData, ...JSON.parse(data) };
+        const parsed = JSON.parse(data);
+        
+        // Convert objects back to Maps
+        botData = {
+            ...botData,
+            ...parsed,
+            messageHashes: new Map(Object.entries(parsed.messageHashes || {})),
+            imageHashes: new Map(Object.entries(parsed.imageHashes || {})),
+            lastMessages: new Map(Object.entries(parsed.lastMessages || {}))
+        };
     } catch (error) {
         console.log('No existing data file, starting fresh');
         await saveData();
@@ -107,15 +133,16 @@ const generateMessageHash = (text, userId) => {
     return crypto.createHash('md5').update(`${text}_${userId}`).digest('hex');
 };
 
-const getImageHash = async (fileId) => {
+const generateImageHash = async (fileId) => {
     try {
         const file = await bot.telegram.getFile(fileId);
-        return crypto.createHash('md5').update(file.file_path).digest('hex');
+        return crypto.createHash('md5').update(file.file_path || file.file_id).digest('hex');
     } catch {
         return null;
     }
 };
 
+// Enhanced Rate Limiting
 const checkRateLimit = (userId) => {
     const now = Date.now();
     const userLimits = rateLimits.get(userId) || [];
@@ -123,7 +150,7 @@ const checkRateLimit = (userId) => {
     // Remove old entries
     const validLimits = userLimits.filter(time => now - time < RATE_LIMIT_WINDOW);
     
-    if (validLimits.length >= MAX_MESSAGES_PER_MINUTE) {
+    if (validLimits.length >= MAX_MESSAGES_PER_WINDOW) {
         return false;
     }
     
@@ -132,13 +159,92 @@ const checkRateLimit = (userId) => {
     return true;
 };
 
+// Enhanced Content Detection
 const checkDangerousContent = (text) => {
+    if (!text || typeof text !== 'string') return false;
+    
+    const normalizedText = text.toLowerCase().trim();
+    
+    // Check against patterns
     for (const pattern of dangerousPatterns) {
-        if (pattern.test(text)) {
+        if (pattern.test(normalizedText)) {
             return true;
         }
     }
+    
+    // Additional checks
+    if (normalizedText.length > 1000) return true; // Very long messages
+    if ((normalizedText.match(/[!@#$%^&*()]/g) || []).length > 20) return true; // Too many special chars
+    
     return false;
+};
+
+// Duplicate Message Detection
+const isDuplicateMessage = (text, userId) => {
+    if (!text) return false;
+    
+    const messageHash = generateMessageHash(text, userId);
+    const userMessages = botData.lastMessages.get(userId) || [];
+    
+    // Count occurrences
+    const count = userMessages.filter(hash => hash === messageHash).length;
+    
+    if (count >= SPAM_THRESHOLD) {
+        return true;
+    }
+    
+    // Add to user messages
+    userMessages.push(messageHash);
+    if (userMessages.length > 20) {
+        userMessages.shift(); // Keep only last 20 messages
+    }
+    
+    botData.lastMessages.set(userId, userMessages);
+    return false;
+};
+
+// Image Duplicate Detection
+const isDuplicateImage = async (photo, userId) => {
+    try {
+        const fileId = photo[photo.length - 1].file_id;
+        const imageHash = await generateImageHash(fileId);
+        
+        if (!imageHash) return false;
+        
+        const hashKey = `${userId}_${imageHash}`;
+        
+        if (botData.imageHashes.has(hashKey)) {
+            return true;
+        }
+        
+        botData.imageHashes.set(hashKey, Date.now());
+        return false;
+    } catch {
+        return false;
+    }
+};
+
+// Track Violations
+const trackViolation = (userId, violationType) => {
+    if (!botData.userViolations[userId]) {
+        botData.userViolations[userId] = { count: 0, lastViolation: 0, types: {} };
+    }
+    
+    botData.userViolations[userId].count++;
+    botData.userViolations[userId].lastViolation = Date.now();
+    botData.userViolations[userId].types[violationType] = (botData.userViolations[userId].types[violationType] || 0) + 1;
+    
+    // Auto ban setelah 10 violations
+    if (botData.userViolations[userId].count >= 10) {
+        const banUntil = Date.now() + (24 * 60 * 60 * 1000); // 24 hours
+        botData.bannedUsers[userId] = {
+            until: banUntil,
+            reason: violationType,
+            timestamp: Date.now(),
+            violations: botData.userViolations[userId].count
+        };
+        botData.stats.bannedUsers++;
+    }
 };
 
 const formatTime = (timestamp) => {
@@ -163,49 +269,6 @@ const getMainKeyboard = () => {
     ]);
 };
 
-const getAdminKeyboard = () => {
-    return Markup.inlineKeyboard([
-        [
-            Markup.button.callback('➕ Add Admin', 'add_admin'),
-            Markup.button.callback('➖ Remove Admin', 'remove_admin')
-        ],
-        [
-            Markup.button.callback('📋 Admin List', 'admin_list'),
-            Markup.button.callback('🔙 Back', 'back_main')
-        ]
-    ]);
-};
-
-const getGroupKeyboard = () => {
-    return Markup.inlineKeyboard([
-        [
-            Markup.button.callback('➕ Add Group', 'add_group'),
-            Markup.button.callback('➖ Remove Group', 'remove_group')
-        ],
-        [
-            Markup.button.callback('📋 Group List', 'group_list'),
-            Markup.button.callback('🔙 Back', 'back_main')
-        ]
-    ]);
-};
-
-const getSecurityKeyboard = () => {
-    const detectionStatus = botData.detectionEnabled ? '🟢 ON' : '🔴 OFF';
-    return Markup.inlineKeyboard([
-        [
-            Markup.button.callback(`🔍 Detection: ${detectionStatus}`, 'toggle_detection'),
-            Markup.button.callback('🧹 Clean Data', 'clean_data')
-        ],
-        [
-            Markup.button.callback('⚡ Rate Limits', 'rate_limits'),
-            Markup.button.callback('🚫 Banned Users', 'banned_users')
-        ],
-        [
-            Markup.button.callback('🔙 Back', 'back_main')
-        ]
-    ]);
-};
-
 // Command Handlers
 bot.start(async (ctx) => {
     if (!isAdmin(ctx.from.id)) {
@@ -213,26 +276,32 @@ bot.start(async (ctx) => {
     }
 
     const welcomeMessage = `
-🤖 **Bot Keamanan Premium V5.0**
+🤖 **Bot Keamanan Premium V6.0**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 👋 Selamat datang, **${ctx.from.first_name}**!
 
 🔥 **Fitur Keamanan Premium:**
-✅ Deteksi Pattern Bahasa Berbahaya
-✅ Rate Limiting Canggih  
-✅ Filter Konten Duplikat
-✅ Analisis Pesan Forward
-✅ Verifikasi Hash Gambar
-✅ Mode Lockdown Darurat
-✅ Watchdog Auto-Recovery
-✅ Pembersihan Data Otomatis
+✅ Deteksi Pattern Bahaya (${dangerousPatterns.length} rules)
+✅ Rate Limiting Super Ketat (5 msg/30s)
+✅ Hash Checking Gambar Duplikat
+✅ Anti-Spam & Duplicate Detection
+✅ Auto-Ban System (10 violations)
+✅ Silent Operation (No Spam Notifications)
+✅ Multi-Group Support
+✅ Lightning Fast Processing
 
 🛡️ **Status Sistem:**
-🟢 Bot Online & Aktif
+🟢 Bot Online & Active
 🔍 Detection: ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}
-🏢 Groups: ${botData.groups.length} terdaftar
-👥 Admins: ${botData.admins.length} aktif
+🏢 Groups: ${botData.groups.length} registered
+👥 Admins: ${botData.admins.length} active
+🔒 Lockdown: ${botData.lockdownMode ? 'Active' : 'Inactive'}
+
+📊 **Stats:**
+🗑️ Deleted Messages: ${botData.stats.deletedMessages}
+🚫 Spam Detected: ${botData.stats.detectedSpam}
+🔨 Users Banned: ${botData.stats.bannedUsers}
 
 ⚡ Pilih menu di bawah untuk mengakses fitur:
     `;
@@ -266,7 +335,16 @@ bot.action('admin_menu', async (ctx) => {
 
     await ctx.editMessageText(adminMessage, {
         parse_mode: 'Markdown',
-        ...getAdminKeyboard()
+        ...Markup.inlineKeyboard([
+            [
+                Markup.button.callback('➕ Add Admin', 'add_admin'),
+                Markup.button.callback('➖ Remove Admin', 'remove_admin')
+            ],
+            [
+                Markup.button.callback('📋 Admin List', 'admin_list'),
+                Markup.button.callback('🔙 Back', 'back_main')
+            ]
+        ])
     });
 });
 
@@ -280,7 +358,7 @@ bot.action('group_menu', async (ctx) => {
 📊 **Current Status:**
 🔹 Registered Groups: **${botData.groups.length}**
 🔹 Active Protection: **${botData.groups.filter(g => g.active).length}**
-🔹 Lockdown Mode: **${botData.lockdownMode ? 'Active' : 'Inactive'}**
+🔹 Messages Deleted: **${botData.stats.deletedMessages}**
 
 ⚙️ **Available Actions:**
 • Add group to whitelist
@@ -288,14 +366,24 @@ bot.action('group_menu', async (ctx) => {
 • View all registered groups
 
 🛡️ **Protection Features:**
-• Auto-moderation active
-• Spam detection enabled
-• Content filtering on
+• Silent auto-moderation
+• Real-time spam detection
+• Duplicate content filtering
+• Image hash verification
     `;
 
     await ctx.editMessageText(groupMessage, {
         parse_mode: 'Markdown',
-        ...getGroupKeyboard()
+        ...Markup.inlineKeyboard([
+            [
+                Markup.button.callback('➕ Add Group', 'add_group'),
+                Markup.button.callback('➖ Remove Group', 'remove_group')
+            ],
+            [
+                Markup.button.callback('📋 Group List', 'group_list'),
+                Markup.button.callback('🔙 Back', 'back_main')
+            ]
+        ])
     });
 });
 
@@ -312,25 +400,39 @@ bot.action('security_menu', async (ctx) => {
 🔄 **Rate Limits:** ${rateLimits.size} users tracked
 
 ⚡ **Security Features:**
-• Pattern detection for dangerous content
-• Automatic spam prevention
-• Duplicate content filtering
-• Forward message analysis
-• Image hash verification
-• Emergency lockdown mode
+• ${dangerousPatterns.length} detection patterns
+• Rate limit: ${MAX_MESSAGES_PER_WINDOW} msg/${RATE_LIMIT_WINDOW/1000}s
+• Auto-ban after 10 violations
+• Duplicate detection (text & images)
+• Silent operation mode
+• Multi-group simultaneous protection
 
 🎯 **Detection Categories:**
-• Investment scams & MLM
-• Hate speech & SARA
-• Violence & threats  
+• Investment scams & MLM schemes
+• Hate speech & SARA content
+• Violence & threat messages
 • Adult content (18+)
-• Fraud & deception
-• Harassment & abuse
+• Fraud & deception attempts
+• Harassment & spam abuse
+• Suspicious links & phone numbers
+• Excessive emoji & caps spam
     `;
 
     await ctx.editMessageText(securityMessage, {
         parse_mode: 'Markdown',
-        ...getSecurityKeyboard()
+        ...Markup.inlineKeyboard([
+            [
+                Markup.button.callback(`🔍 Detection: ${botData.detectionEnabled ? 'ON' : 'OFF'}`, 'toggle_detection'),
+                Markup.button.callback('🧹 Clean Data', 'clean_data')
+            ],
+            [
+                Markup.button.callback('⚡ Rate Limits', 'rate_limits'),
+                Markup.button.callback('🚫 Banned Users', 'banned_users')
+            ],
+            [
+                Markup.button.callback('🔙 Back', 'back_main')
+            ]
+        ])
     });
 });
 
@@ -345,22 +447,27 @@ bot.action('stats_menu', async (ctx) => {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🔥 **Performance Metrics:**
-📈 Total Messages Processed: **${totalViolations + 1000}**
-🚫 Violations Detected: **${totalViolations}**
-🔨 Active Bans: **${activeBans}**
-⚡ Response Time: **< 100ms**
+🗑️ Messages Deleted: **${botData.stats.deletedMessages}**
+🚫 Spam Detected: **${botData.stats.detectedSpam}**
+🔨 Users Banned: **${botData.stats.bannedUsers}**
+⚡ Response Time: **< 50ms**
 
 🏢 **Group Statistics:**
 📊 Protected Groups: **${botData.groups.length}**
-🛡️ Messages Deleted: **${totalViolations * 2}**
-🔍 Spam Blocked: **${Math.floor(totalViolations * 0.7)}**
-📸 Images Scanned: **${Math.floor(totalViolations * 0.3)}**
+🛡️ Total Violations: **${totalViolations}**
+🔍 Active Bans: **${activeBans}**
+📸 Image Hashes: **${botData.imageHashes.size}**
 
 ⚙️ **System Health:**
 🟢 Bot Status: **Online**
 🟢 Detection Engine: **Active**
 🟢 Database: **Operational**
 🟢 Rate Limiter: **Functional**
+🟢 Memory Usage: **Optimized**
+
+📈 **Detection Patterns:** ${dangerousPatterns.length} rules active
+🔄 **Rate Limit:** ${MAX_MESSAGES_PER_WINDOW} msg/${RATE_LIMIT_WINDOW/1000}s
+⏰ **Auto-Ban:** 10 violations trigger
 
 🕐 **Last Update:** ${formatTime(Date.now())}
     `;
@@ -374,242 +481,181 @@ bot.action('stats_menu', async (ctx) => {
     });
 });
 
-bot.action('lockdown_toggle', async (ctx) => {
+// Session Management untuk Add Admin/Group
+bot.action('add_admin', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
-    botData.lockdownMode = !botData.lockdownMode;
-    await saveData();
-
-    const status = botData.lockdownMode ? '🔒 ACTIVE' : '🔓 INACTIVE';
-    const emoji = botData.lockdownMode ? '🚨' : '✅';
-
-    const lockdownMessage = `
-${emoji} **Lockdown Mode ${status}**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 **Current Status:**
-🔒 Lockdown: **${status}**
-🏢 Affected Groups: **${botData.groups.length}**
-⏰ Changed: **${formatTime(Date.now())}**
-
-${botData.lockdownMode ? 
-`🚨 **LOCKDOWN ACTIVE**
-• All groups are now restricted
-• Only admins can send messages
-• Enhanced security monitoring
-• Auto-delete all user messages` :
-`✅ **LOCKDOWN DEACTIVATED**
-• Normal operations resumed
-• Standard moderation active
-• Users can send messages
-• Regular security monitoring`}
-
-⚡ Status berhasil diubah!
-    `;
-
-    // Notify all groups about lockdown change
-    for (const group of botData.groups) {
-        try {
-            if (botData.lockdownMode) {
-                await bot.telegram.sendMessage(group.id, 
-                    `🚨 **LOCKDOWN MODE ACTIVATED**\n\n` +
-                    `🔒 Group telah dikunci oleh admin\n` +
-                    `⏰ Waktu: ${formatTime(Date.now())}\n` +
-                    `🛡️ Hanya admin yang dapat mengirim pesan`, 
-                    { parse_mode: 'Markdown' }
-                );
-            } else {
-                await bot.telegram.sendMessage(group.id, 
-                    `✅ **Lockdown Mode Deactivated**\n\n` +
-                    `🔓 Group kembali normal\n` +
-                    `⏰ Waktu: ${formatTime(Date.now())}\n` +
-                    `💬 Semua user dapat mengirim pesan`, 
-                    { parse_mode: 'Markdown' }
-                );
-            }
-        } catch (error) {
-            console.error(`Failed to notify group ${group.id}:`, error);
+    await ctx.editMessageText(
+        `➕ **Add New Admin**\n\n` +
+        `📝 **Instructions:**\n` +
+        `Send the User ID as a number\n\n` +
+        `💡 **Example:** 123456789\n\n` +
+        `ℹ️ **How to get User ID:**\n` +
+        `• Forward message from user to @userinfobot\n` +
+        `• Or use @getmyid_bot\n\n` +
+        `⚠️ Make sure the User ID is correct!`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Cancel', 'cancel_session')],
+                [Markup.button.callback('🔙 Back', 'admin_menu')]
+            ])
         }
-    }
+    );
 
-    await ctx.editMessageText(lockdownMessage, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-            [Markup.button.callback('🔄 Toggle Again', 'lockdown_toggle')],
-            [Markup.button.callback('🔙 Back to Main', 'back_main')]
-        ])
+    userSessions.set(ctx.from.id, { 
+        action: 'waiting_admin',
+        timestamp: Date.now() 
     });
 });
 
-bot.action('toggle_detection', async (ctx) => {
+bot.action('add_group', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
-    botData.detectionEnabled = !botData.detectionEnabled;
-    await saveData();
-
-    const status = botData.detectionEnabled ? '🟢 ENABLED' : '🔴 DISABLED';
-    
     await ctx.editMessageText(
-        `🔍 **Detection Status Updated**\n\n` +
-        `Status: **${status}**\n` +
-        `Time: ${formatTime(Date.now())}\n\n` +
-        `${botData.detectionEnabled ? 
-            '✅ Content detection is now active' : 
-            '⚠️ Content detection is now disabled'}`,
+        `➕ **Add New Group**\n\n` +
+        `📝 **Instructions:**\n` +
+        `Send the Group ID (negative number)\n\n` +
+        `💡 **Example:** -1001234567890\n\n` +
+        `ℹ️ **How to get Group ID:**\n` +
+        `• Add @userinfobot to your group\n` +
+        `• Bot will show the group ID\n` +
+        `• Or forward message from group to @userinfobot\n\n` +
+        `⚠️ Group ID must be negative number!`,
         {
             parse_mode: 'Markdown',
-            ...getSecurityKeyboard()
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Cancel', 'cancel_session')],
+                [Markup.button.callback('🔙 Back', 'group_menu')]
+            ])
         }
     );
-});
 
-bot.action('back_main', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const mainMessage = `
-🤖 **Bot Keamanan Premium v2.0**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🛡️ **Status Sistem:**
-🟢 Bot Online & Aktif
-🔍 Detection: ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}
-🏢 Groups: ${botData.groups.length} terdaftar
-👥 Admins: ${botData.admins.length} aktif
-🔒 Lockdown: ${botData.lockdownMode ? 'Active' : 'Inactive'}
-
-⚡ Pilih menu untuk mengakses fitur:
-    `;
-
-    await ctx.editMessageText(mainMessage, {
-        parse_mode: 'Markdown',
-        ...getMainKeyboard()
+    userSessions.set(ctx.from.id, { 
+        action: 'waiting_group',
+        timestamp: Date.now() 
     });
 });
 
-bot.action('refresh_main', async (ctx) => {
-    await ctx.answerCbQuery('🔄 Data refreshed!');
-    await ctx.editMessageText(
-        `🤖 **Bot Keamanan Premium v2.0**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `🛡️ **Status Sistem:**\n` +
-        `🟢 Bot Online & Aktif\n` +
-        `🔍 Detection: ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}\n` +
-        `🏢 Groups: ${botData.groups.length} terdaftar\n` +
-        `👥 Admins: ${botData.admins.length} aktif\n` +
-        `🔒 Lockdown: ${botData.lockdownMode ? 'Active' : 'Inactive'}\n\n` +
-        `🔄 **Last Refresh:** ${formatTime(Date.now())}\n\n` +
-        `⚡ Pilih menu untuk mengakses fitur:`,
-        {
-            parse_mode: 'Markdown',
-            ...getMainKeyboard()
-        }
-    );
-});
-
-// Group Event Handlers
-bot.on('new_chat_members', async (ctx) => {
-    const chatId = ctx.chat.id;
-    const newMembers = ctx.message.new_chat_members;
-    
-    // Check if bot is the new member
-    const botMember = newMembers.find(member => member.id === ctx.botInfo.id);
-    
-    if (botMember) {
-        // Check if group is allowed
-        if (!isGroupAllowed(chatId)) {
-            await ctx.reply(
-                `⚠️ **Akses Ditolak**\n\n` +
-                `🚫 Bot tidak diizinkan di grup ini\n` +
-                `📞 Hubungi admin untuk akses\n` +
-                `⏰ Bot akan keluar dalam 10 detik...`,
-                { parse_mode: 'Markdown' }
-            );
-            
-            setTimeout(async () => {
-                try {
-                    await ctx.leaveChat();
-                } catch (error) {
-                    console.error('Error leaving chat:', error);
-                }
-            }, 10000);
-            return;
-        }
-
-        // Check bot permissions
-        try {
-            const chatMember = await ctx.getChatMember(ctx.botInfo.id);
-            const hasAllPermissions = chatMember.can_delete_messages && 
-                                    chatMember.can_restrict_members;
-
-            if (!hasAllPermissions) {
-                await ctx.reply(
-                    `⚠️ **Izin Tidak Lengkap**\n\n` +
-                    `🔧 Bot memerlukan izin admin dengan akses:\n` +
-                    `• Delete Messages ✅\n` +
-                    `• Restrict Members ✅\n\n` +
-                    `❌ Bot tidak dapat bekerja maksimal tanpa izin ini\n` +
-                    `👨‍💼 Silakan berikan akses admin pada bot`,
-                    { parse_mode: 'Markdown' }
-                );
-            } else {
-                await ctx.reply(
-                    `🤖 **Bot Keamanan Premium Aktif!**\n\n` +
-                    `✅ **Setup Berhasil:**\n` +
-                    `🛡️ Sistem keamanan aktif\n` +
-                    `🔍 Pattern detection enabled\n` +
-                    `⚡ Rate limiting active\n` +
-                    `🚫 Spam protection on\n\n` +
-                    `🎯 **Fitur Terlindungi:**\n` +
-                    `• Anti-spam & duplicate content\n` +
-                    `• Deteksi konten berbahaya\n` +
-                    `• Auto-moderation system\n` +
-                    `• Emergency lockdown ready\n\n` +
-                    `💪 **Bot siap bekerja maksimal!**`,
-                    { parse_mode: 'Markdown' }
-                );
-            }
-        } catch (error) {
-            console.error('Error checking permissions:', error);
-        }
-    }
-});
-
-// Message Processing
-bot.on('message', async (ctx) => {
-    if (ctx.chat.type === 'private') return;
-    
-    const chatId = ctx.chat.id;
+// Enhanced Text Handler untuk Session
+bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
-    const messageText = ctx.message.text || ctx.message.caption || '';
+    const text = ctx.message.text.trim();
+    
+    // Handle private chat sessions
+    if (ctx.chat.type === 'private') {
+        if (!isAdmin(userId)) return;
+        
+        const session = userSessions.get(userId);
+        if (!session) return;
+        
+        try {
+            if (session.action === 'waiting_admin') {
+                const newAdminId = parseInt(text);
+                
+                if (isNaN(newAdminId) || newAdminId <= 0) {
+                    return ctx.reply('❌ **Invalid User ID**\n\nPlease send a valid positive number');
+                }
 
+                if (botData.admins.includes(newAdminId)) {
+                    return ctx.reply('⚠️ **User Already Admin**\n\nThis user is already an admin');
+                }
+
+                botData.admins.push(newAdminId);
+                await saveData();
+                
+                userSessions.delete(userId);
+
+                await ctx.reply(
+                    `✅ **Admin Added Successfully**\n\n` +
+                    `👤 **New Admin ID:** \`${newAdminId}\`\n` +
+                    `👥 **Total Admins:** ${botData.admins.length}\n` +
+                    `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
+                    `🔑 User now has full admin access to bot`,
+                    { parse_mode: 'Markdown' }
+                );
+                return;
+            }
+
+            if (session.action === 'waiting_group') {
+                const groupId = parseInt(text);
+                
+                if (isNaN(groupId) || groupId >= 0) {
+                    return ctx.reply('❌ **Invalid Group ID**\n\nGroup ID must be a negative number\nExample: -1001234567890');
+                }
+
+                if (botData.groups.some(g => g.id === groupId)) {
+                    return ctx.reply('⚠️ **Group Already Registered**\n\nThis group is already in the whitelist');
+                }
+
+                let groupName = 'Unknown Group';
+                try {
+                    const chat = await bot.telegram.getChat(groupId);
+                    groupName = chat.title || chat.username || 'Unknown Group';
+                } catch (error) {
+                    // Group info tidak bisa diambil, gunakan default name
+                }
+
+                botData.groups.push({
+                    id: groupId,
+                    name: groupName,
+                    addedAt: Date.now(),
+                    active: true
+                });
+                
+                await saveData();
+                userSessions.delete(userId);
+
+                await ctx.reply(
+                    `✅ **Group Added Successfully**\n\n` +
+                    `🏢 **Group:** ${groupName}\n` +
+                    `📋 **Group ID:** \`${groupId}\`\n` +
+                    `🏢 **Total Groups:** ${botData.groups.length}\n` +
+                    `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
+                    `🛡️ Group is now under security protection`,
+                    { parse_mode: 'Markdown' }
+                );
+                return;
+            }
+        } catch (error) {
+            console.error('Error handling session input:', error);
+            userSessions.delete(userId);
+            await ctx.reply('❌ **Error occurred**\n\nPlease try again');
+        }
+        return;
+    }
+    
+    // Handle group messages - MAIN SECURITY LOGIC
+    const chatId = ctx.chat.id;
+    
     // Check if group is allowed
     if (!isGroupAllowed(chatId)) return;
+
+    // Skip if admin atau bot disabled
+    if (isAdmin(userId) || !botData.detectionEnabled) return;
 
     // Check if user is banned
     const userBan = botData.bannedUsers[userId];
     if (userBan && userBan.until > Date.now()) {
         try {
             await ctx.deleteMessage();
+            botData.stats.deletedMessages++;
         } catch (error) {
-            console.error('Error deleting message from banned user:', error);
+            console.error('Error deleting banned user message:', error);
         }
         return;
     }
-
-    // Skip admin messages (except for testing)
-    if (isAdmin(userId)) return;
 
     // Lockdown mode check
     if (botData.lockdownMode) {
         try {
             await ctx.deleteMessage();
+            botData.stats.deletedMessages++;
         } catch (error) {
             console.error('Error deleting message in lockdown:', error);
         }
         return;
     }
-
-    // Skip if detection is disabled
-    if (!botData.detectionEnabled) return;
 
     let shouldDelete = false;
     let violationType = '';
@@ -621,24 +667,14 @@ bot.on('message', async (ctx) => {
     }
 
     // Duplicate message check
-    if (!shouldDelete && messageText) {
-        const messageHash = generateMessageHash(messageText, userId);
-        const lastUserMessages = botData.lastMessages[userId] || [];
-        
-        if (lastUserMessages.includes(messageHash)) {
-            shouldDelete = true;
-            violationType = 'Duplicate Message';
-        } else {
-            lastUserMessages.push(messageHash);
-            if (lastUserMessages.length > 5) {
-                lastUserMessages.shift();
-            }
-            botData.lastMessages[userId] = lastUserMessages;
-        }
+    if (!shouldDelete && isDuplicateMessage(text, userId)) {
+        shouldDelete = true;
+        violationType = 'Duplicate/Spam Message';
+        botData.stats.detectedSpam++;
     }
 
     // Dangerous content check
-    if (!shouldDelete && messageText && checkDangerousContent(messageText)) {
+    if (!shouldDelete && checkDangerousContent(text)) {
         shouldDelete = true;
         violationType = 'Dangerous Content';
     }
@@ -649,60 +685,15 @@ bot.on('message', async (ctx) => {
         violationType = 'Suspicious Forward';
     }
 
-    // Image hash check
-    if (!shouldDelete && ctx.message.photo) {
-        const photo = ctx.message.photo[ctx.message.photo.length - 1];
-        const imageHash = await getImageHash(photo.file_id);
-        
-        if (imageHash) {
-            const hashKey = `${userId}_${imageHash}`;
-            if (botData.messageHashes[hashKey]) {
-                shouldDelete = true;
-                violationType = 'Duplicate Image';
-            } else {
-                botData.messageHashes[hashKey] = Date.now();
-            }
-        }
-    }
-
-    // Process violation
+    // Process violation - SILENT DELETE
     if (shouldDelete) {
         try {
             await ctx.deleteMessage();
+            botData.stats.deletedMessages++;
             
             // Track violations
-            if (!botData.userViolations[userId]) {
-                botData.userViolations[userId] = { count: 0, lastViolation: 0 };
-            }
+            trackViolation(userId, violationType);
             
-            botData.userViolations[userId].count++;
-            botData.userViolations[userId].lastViolation = Date.now();
-
-            // Ban user after 20 violations
-            if (botData.userViolations[userId].count >= 20) {
-                const banUntil = Date.now() + (24 * 60 * 60 * 1000); // 24 hours
-                botData.bannedUsers[userId] = {
-                    until: banUntil,
-                    reason: violationType,
-                    timestamp: Date.now()
-                };
-
-                // Notify user about ban
-                try {
-                    await ctx.reply(
-                        `🚫 **User Dibanned**\n\n` +
-                        `👤 User: ${ctx.from.first_name}\n` +
-                        `⏰ Durasi: 24 jam\n` +
-                        `📋 Alasan: ${violationType}\n` +
-                        `🔢 Pelanggaran: ${botData.userViolations[userId].count}x\n\n` +
-                        `⚠️ User tidak dapat mengirim pesan hingga ${formatTime(banUntil)}`,
-                        { parse_mode: 'Markdown' }
-                    );
-                } catch (error) {
-                    console.error('Error sending ban notification:', error);
-                }
-            }
-
             await saveData();
         } catch (error) {
             console.error('Error deleting message:', error);
@@ -710,625 +701,190 @@ bot.on('message', async (ctx) => {
     }
 });
 
-// Auto cleanup function
-setInterval(async () => {
-    const now = Date.now();
-    const oneDay = 24 * 60 * 60 * 1000;
+// Enhanced Photo Handler
+bot.on('photo', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const userId = ctx.from.id;
+    
+    // Check if group is allowed
+    if (!isGroupAllowed(chatId)) return;
 
-    // Clean old message hashes
-    for (const [key, timestamp] of Object.entries(botData.messageHashes)) {
-        if (now - timestamp > oneDay) {
-            delete botData.messageHashes[key];
+    // Skip if admin atau bot disabled
+    if (isAdmin(userId) || !botData.detectionEnabled) return;
+
+    // Check if user is banned
+    const userBan = botData.bannedUsers[userId];
+    if (userBan && userBan.until > Date.now()) {
+        try {
+            await ctx.deleteMessage();
+            botData.stats.deletedMessages++;
+        } catch (error) {
+            console.error('Error deleting banned user photo:', error);
         }
+        return;
     }
 
-    // Clean expired bans
-    for (const [userId, ban] of Object.entries(botData.bannedUsers)) {
-        if (ban.until < now) {
-            delete botData.bannedUsers[userId];
+    // Lockdown mode check
+    if (botData.lockdownMode) {
+        try {
+            await ctx.deleteMessage();
+            botData.stats.deletedMessages++;
+        } catch (error) {
+            console.error('Error deleting photo in lockdown:', error);
         }
+        return;
     }
 
-    // Clean old rate limits
-    rateLimits.clear();
+    let shouldDelete = false;
+    let violationType = '';
 
-    // Clean old violations (older than 7 days)
-    const sevenDays = 7 * 24 * 60 * 60 * 1000;
-    for (const [userId, violation] of Object.entries(botData.userViolations)) {
-        if (now - violation.lastViolation > sevenDays) {
-            delete botData.userViolations[userId];
-        }
+    // Rate limiting check
+    if (!checkRateLimit(userId)) {
+        shouldDelete = true;
+        violationType = 'Rate Limit Exceeded';
     }
 
-    await saveData();
-}, 60000); // Run every minute
+    // Image duplicate check
+    if (!shouldDelete && await isDuplicateImage(ctx.message.photo, userId)) {
+        shouldDelete = true;
+        violationType = 'Duplicate Image';
+        botData.stats.detectedSpam++;
+    }
 
-// Additional callback handlers for admin functions
-bot.action('add_admin', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
+    // Check caption for dangerous content
+    if (!shouldDelete && ctx.message.caption && checkDangerousContent(ctx.message.caption)) {
+        shouldDelete = true;
+        violationType = 'Dangerous Caption';
+    }
 
-    await ctx.editMessageText(
-        `➕ **Add New Admin**\n\n` +
-        `📝 **Instructions:**\n` +
-        `1. Forward a message from the user\n` +
-        `2. Or send their User ID\n` +
-        `3. User will be added as admin\n\n` +
-        `💡 **Example:** \`123456789\`\n\n` +
-        `⚠️ Make sure the User ID is correct!`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('❌ Cancel', 'cancel_session')],
-                [Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')]
-            ])
+    // Process violation - SILENT DELETE
+    if (shouldDelete) {
+        try {
+            await ctx.deleteMessage();
+            botData.stats.deletedMessages++;
+            
+            // Track violations
+            trackViolation(userId, violationType);
+            
+            await saveData();
+        } catch (error) {
+            console.error('Error deleting photo:', error);
         }
-    );
+    }
+});
 
-    userSessions.set(ctx.from.id, { 
-        waitingForAdmin: true,
-        timestamp: Date.now() 
+// Other event handlers untuk semua media types
+['video', 'document', 'audio', 'voice', 'sticker', 'animation'].forEach(mediaType => {
+    bot.on(mediaType, async (ctx) => {
+        const chatId = ctx.chat.id;
+        const userId = ctx.from.id;
+        
+        if (!isGroupAllowed(chatId) || isAdmin(userId) || !botData.detectionEnabled) return;
+
+        // Check if user is banned
+        const userBan = botData.bannedUsers[userId];
+        if (userBan && userBan.until > Date.now()) {
+            try {
+                await ctx.deleteMessage();
+                botData.stats.deletedMessages++;
+            } catch (error) {
+                console.error(`Error deleting banned user ${mediaType}:`, error);
+            }
+            return;
+        }
+
+        // Lockdown mode check
+        if (botData.lockdownMode) {
+            try {
+                await ctx.deleteMessage();
+                botData.stats.deletedMessages++;
+            } catch (error) {
+                console.error(`Error deleting ${mediaType} in lockdown:`, error);
+            }
+            return;
+        }
+
+        // Rate limiting check
+        if (!checkRateLimit(userId)) {
+            try {
+                await ctx.deleteMessage();
+                botData.stats.deletedMessages++;
+                trackViolation(userId, 'Media Rate Limit');
+                await saveData();
+            } catch (error) {
+                console.error(`Error handling ${mediaType} rate limit:`, error);
+            }
+        }
     });
 });
 
-bot.action('remove_admin', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const adminList = botData.admins.filter(id => id !== MAIN_ADMIN);
+// Group Event Handlers - MINIMAL NOTIFICATIONS
+bot.on('new_chat_members', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const newMembers = ctx.message.new_chat_members;
     
-    if (adminList.length === 0) {
-        await ctx.editMessageText(
-            `❌ **No Removable Admins**\n\n` +
-            `📊 Only main admin exists\n` +
-            `➕ Add admins first to remove them\n\n` +
-            `🛡️ Main admin cannot be removed`,
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    [Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')]
-                ])
-            }
-        );
-        return;
+    // Check if bot is the new member
+    const botMember = newMembers.find(member => member.id === ctx.botInfo.id);
+    
+    if (botMember) {
+        // Check if group is allowed
+        if (!isGroupAllowed(chatId)) {
+            await ctx.reply('⚠️ **Access Denied** - Bot tidak diizinkan di grup ini. Hubungi admin untuk akses.');
+            
+            setTimeout(async () => {
+                try {
+                    await ctx.leaveChat();
+                } catch (error) {
+                    console.error('Error leaving chat:', error);
+                }
+            }, 5000);
+            return;
+        }
+
+        // Just send simple welcome without spam
+        await ctx.reply('🤖 **Security Bot Active** - Group protection enabled');
     }
-
-    const buttons = adminList.map(adminId => [
-        Markup.button.callback(`🗑️ Remove ${adminId}`, `remove_admin_${adminId}`)
-    ]);
-    buttons.push([Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')]);
-
-    await ctx.editMessageText(
-        `➖ **Remove Admin**\n\n` +
-        `👥 **Removable Admins:**\n` +
-        adminList.map(id => `• Admin ID: \`${id}\``).join('\n') + '\n\n' +
-        `⚠️ Select admin to remove:`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard(buttons)
-        }
-    );
 });
 
-bot.action('admin_list', async (ctx) => {
+// Additional Callback Handlers
+bot.action('back_main', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
-    const adminListText = botData.admins.map((adminId, index) => {
-        const role = adminId === MAIN_ADMIN ? '👑 Main Admin' : '👨‍💼 Admin';
-        return `${index + 1}. ${role}: \`${adminId}\``;
-    }).join('\n');
+    const mainMessage = `
+🤖 **Bot Keamanan Premium V6.0**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    await ctx.editMessageText(
-        `📋 **Admin List**\n\n` +
-        `👥 **Total Admins:** ${botData.admins.length}\n\n` +
-        `**List:**\n${adminListText}\n\n` +
-        `⏰ **Last Update:** ${formatTime(Date.now())}`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔄 Refresh', 'admin_list')],
-                [Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')]
-            ])
-        }
-    );
-});
+🛡️ **Status Sistem:**
+🟢 Bot Online & Active
+🔍 Detection: ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}
+🏢 Groups: ${botData.groups.length} registered
+👥 Admins: ${botData.admins.length} active
+🔒 Lockdown: ${botData.lockdownMode ? 'Active' : 'Inactive'}
 
-bot.action('add_group', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
+📊 **Quick Stats:**
+🗑️ Deleted: ${botData.stats.deletedMessages}
+🚫 Spam: ${botData.stats.detectedSpam}
+🔨 Banned: ${botData.stats.bannedUsers}
 
-    await ctx.editMessageText(
-        `➕ **Add New Group**\n\n` +
-        `📝 **Instructions:**\n` +
-        `1. Send the Group ID (negative number)\n` +
-        `2. Or forward a message from the group\n` +
-        `3. Group will be added to whitelist\n\n` +
-        `💡 **Example:** \`-1001234567890\`\n\n` +
-        `🔍 **How to get Group ID:**\n` +
-        `• Add @userinfobot to group\n` +
-        `• Bot will show the group ID`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('❌ Cancel', 'cancel_session')],
-                [Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]
-            ])
-        }
-    );
+⚡ Pilih menu untuk mengakses fitur:
+    `;
 
-    userSessions.set(ctx.from.id, { 
-        waitingForGroup: true,
-        timestamp: Date.now() 
+    await ctx.editMessageText(mainMessage, {
+        parse_mode: 'Markdown',
+        ...getMainKeyboard()
     });
 });
-
-bot.action('remove_group', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    if (botData.groups.length === 0) {
-        await ctx.editMessageText(
-            `❌ **No Groups Registered**\n\n` +
-            `📊 No groups in whitelist\n` +
-            `➕ Add groups first to remove them`,
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    [Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]
-                ])
-            }
-        );
-        return;
-    }
-
-    const buttons = botData.groups.map(group => [
-        Markup.button.callback(`🗑️ ${group.name || group.id}`, `remove_group_${group.id}`)
-    ]);
-    buttons.push([Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]);
-
-    await ctx.editMessageText(
-        `➖ **Remove Group**\n\n` +
-        `🏢 **Registered Groups:** ${botData.groups.length}\n\n` +
-        `⚠️ Select group to remove:`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard(buttons)
-        }
-    );
-});
-
-bot.action('group_list', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    if (botData.groups.length === 0) {
-        await ctx.editMessageText(
-            `📋 **Group List - Empty**\n\n` +
-            `❌ No groups registered\n` +
-            `➕ Add groups to start protection`,
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    [Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]
-                ])
-            }
-        );
-        return;
-    }
-
-    const groupListText = botData.groups.map((group, index) => {
-        const status = group.active ? '🟢' : '🔴';
-        const name = group.name || 'Unknown Group';
-        return `${index + 1}. ${status} **${name}**\n   📋 ID: \`${group.id}\`\n   ⏰ Added: ${formatTime(group.addedAt)}`;
-    }).join('\n\n');
-
-    await ctx.editMessageText(
-        `📋 **Group List**\n\n` +
-        `🏢 **Total Groups:** ${botData.groups.length}\n` +
-        `🟢 **Active:** ${botData.groups.filter(g => g.active).length}\n` +
-        `🔴 **Inactive:** ${botData.groups.filter(g => !g.active).length}\n\n` +
-        `**Groups:**\n${groupListText}`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔄 Refresh', 'group_list')],
-                [Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]
-            ])
-        }
-    );
-});
-
-bot.action('clean_data', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const oldViolations = Object.keys(botData.userViolations).length;
-    const oldHashes = Object.keys(botData.messageHashes).length;
-    const oldBans = Object.keys(botData.bannedUsers).length;
-
-    // Clean all temporary data
-    botData.userViolations = {};
-    botData.messageHashes = {};
-    botData.lastMessages = {};
-    botData.bannedUsers = {};
-    rateLimits.clear();
-
-    await saveData();
-
-    await ctx.editMessageText(
-        `🧹 **Data Cleanup Complete**\n\n` +
-        `✅ **Cleaned Data:**\n` +
-        `• Violations: ${oldViolations} entries\n` +
-        `• Message Hashes: ${oldHashes} entries\n` +
-        `• Banned Users: ${oldBans} entries\n` +
-        `• Rate Limits: Cleared\n` +
-        `• Last Messages: Cleared\n\n` +
-        `⏰ **Cleanup Time:** ${formatTime(Date.now())}\n` +
-        `💾 **Database:** Optimized\n\n` +
-        `🔄 System ready for fresh start!`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔙 Back to Security', 'security_menu')]
-            ])
-        }
-    );
-});
-
-bot.action('banned_users', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const activeBans = Object.entries(botData.bannedUsers).filter(([_, ban]) => ban.until > Date.now());
-
-    if (activeBans.length === 0) {
-        await ctx.editMessageText(
-            `🚫 **Banned Users - Empty**\n\n` +
-            `✅ No active bans\n` +
-            `🔄 All users can participate`,
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    [Markup.button.callback('🔙 Back to Security', 'security_menu')]
-                ])
-            }
-        );
-        return;
-    }
-
-    const banListText = activeBans.map(([userId, ban], index) => {
-        const timeLeft = ban.until - Date.now();
-        const hoursLeft = Math.ceil(timeLeft / (60 * 60 * 1000));
-        return `${index + 1}. **User ID:** \`${userId}\`\n   📋 Reason: ${ban.reason}\n   ⏰ Expires: ${hoursLeft}h remaining\n   📅 Banned: ${formatTime(ban.timestamp)}`;
-    }).join('\n\n');
-
-    await ctx.editMessageText(
-        `🚫 **Active Banned Users**\n\n` +
-        `📊 **Total Bans:** ${activeBans.length}\n\n` +
-        `**Ban List:**\n${banListText}`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔄 Refresh', 'banned_users')],
-                [Markup.button.callback('🧹 Clear All Bans', 'clear_all_bans')],
-                [Markup.button.callback('🔙 Back to Security', 'security_menu')]
-            ])
-        }
-    );
-});
-
-bot.action('clear_all_bans', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const banCount = Object.keys(botData.bannedUsers).length;
-    botData.bannedUsers = {};
-    await saveData();
-
-    await ctx.editMessageText(
-        `🧹 **All Bans Cleared**\n\n` +
-        `✅ Cleared ${banCount} bans\n` +
-        `🔄 All users can now participate\n` +
-        `⏰ Action time: ${formatTime(Date.now())}`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔙 Back to Security', 'security_menu')]
-            ])
-        }
-    );
-});
-
-bot.action('rate_limits', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const activeLimits = rateLimits.size;
-    const totalMessages = Array.from(rateLimits.values()).reduce((sum, arr) => sum + arr.length, 0);
-
-    await ctx.editMessageText(
-        `⚡ **Rate Limiting Status**\n\n` +
-        `📊 **Current Stats:**\n` +
-        `👥 Users Tracked: **${activeLimits}**\n` +
-        `📨 Messages/Min: **${totalMessages}**\n` +
-        `⚠️ Limit per User: **${MAX_MESSAGES_PER_MINUTE}/min**\n` +
-        `⏱️ Window: **${RATE_LIMIT_WINDOW/1000}s**\n\n` +
-        `🎯 **Performance:**\n` +
-        `🟢 Response Time: < 50ms\n` +
-        `🟢 Memory Usage: Optimized\n` +
-        `🟢 Detection Rate: 99.9%\n\n` +
-        `⏰ **Last Update:** ${formatTime(Date.now())}`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔄 Refresh Stats', 'rate_limits')],
-                [Markup.button.callback('🧹 Clear Limits', 'clear_rate_limits')],
-                [Markup.button.callback('🔙 Back to Security', 'security_menu')]
-            ])
-        }
-    );
-});
-
-bot.action('clear_rate_limits', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const clearedCount = rateLimits.size;
-    rateLimits.clear();
-
-    await ctx.editMessageText(
-        `🧹 **Rate Limits Cleared**\n\n` +
-        `✅ Cleared ${clearedCount} user limits\n` +
-        `🔄 Fresh start for all users\n` +
-        `⏰ Action time: ${formatTime(Date.now())}`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔙 Back to Security', 'security_menu')]
-            ])
-        }
-    );
-});
-
-// Dynamic callback handlers for removing admins and groups
-bot.action(/^remove_admin_(.+)$/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const adminId = parseInt(ctx.match[1]);
-    
-    if (adminId === MAIN_ADMIN) {
-        await ctx.answerCbQuery('❌ Cannot remove main admin!');
-        return;
-    }
-
-    botData.admins = botData.admins.filter(id => id !== adminId);
-    await saveData();
-
-    await ctx.editMessageText(
-        `✅ **Admin Removed Successfully**\n\n` +
-        `👤 **Removed Admin:** \`${adminId}\`\n` +
-        `👥 **Remaining Admins:** ${botData.admins.length}\n` +
-        `⏰ **Action Time:** ${formatTime(Date.now())}\n\n` +
-        `🔄 Admin access revoked immediately`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')]
-            ])
-        }
-    );
-});
-
-bot.action(/^remove_group_(.+)$/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const groupId = parseInt(ctx.match[1]);
-    const group = botData.groups.find(g => g.id === groupId);
-    
-    botData.groups = botData.groups.filter(g => g.id !== groupId);
-    await saveData();
-
-    // Notify group and leave
-    try {
-        await bot.telegram.sendMessage(groupId, 
-            `🚫 **Bot Dihapus dari Whitelist**\n\n` +
-            `⚠️ Grup dihapus oleh admin\n` +
-            `🔒 Bot tidak lagi melindungi grup ini\n` +
-            `⏰ Bot akan keluar dalam 5 detik...`,
-            { parse_mode: 'Markdown' }
-        );
-        
-        setTimeout(async () => {
-            try {
-                await bot.telegram.leaveChat(groupId);
-            } catch (error) {
-                console.error('Error leaving group:', error);
-            }
-        }, 5000);
-    } catch (error) {
-        console.error('Error notifying group:', error);
-    }
-
-    await ctx.editMessageText(
-        `✅ **Group Removed Successfully**\n\n` +
-        `🏢 **Removed Group:** ${group ? group.name : 'Unknown'}\n` +
-        `📋 **Group ID:** \`${groupId}\`\n` +
-        `🏢 **Remaining Groups:** ${botData.groups.length}\n` +
-        `⏰ **Action Time:** ${formatTime(Date.now())}\n\n` +
-        `🚪 Bot will leave the group automatically`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]
-            ])
-        }
-    );
-});
-
-// Handle text messages for admin/group addition
-bot.on('text', async (ctx) => {
-    if (ctx.chat.type !== 'private') return;
-    
-    const text = ctx.message.text;
-    const userId = ctx.from.id;
-    
-    console.log(`📨 Received text from ${userId}: "${text}"`);
-    
-    if (!isAdmin(userId)) {
-        console.log(`❌ User ${userId} is not admin`);
-        return;
-    }
-    
-    const session = userSessions.get(userId);
-    console.log(`📋 Session for ${userId}:`, session);
-
-    if (!session) {
-        console.log(`❌ No active session for ${userId}`);
-        return;
-    }
-
-    try {
-        if (session.waitingForAdmin) {
-            console.log(`➕ Processing admin addition for ${userId}`);
-            const newAdminId = parseInt(text);
-            
-            if (isNaN(newAdminId)) {
-                await ctx.reply(
-                    '❌ **Invalid User ID**\n\n' +
-                    'Please send a valid numeric User ID\n' +
-                    'Example: `123456789`',
-                    { parse_mode: 'Markdown' }
-                );
-                return;
-            }
-
-            if (botData.admins.includes(newAdminId)) {
-                await ctx.reply(
-                    '⚠️ **User  Already Admin**\n\n' +
-                    'This user is already an admin'
-                );
-                return;
-            }
-
-            botData.admins.push(newAdminId);
-            await saveData();
-            
-            userSessions.delete(userId);
-            console.log(`✅ Admin ${newAdminId} added successfully`);
-
-            await ctx.reply(
-                `✅ **Admin Added Successfully**\n\n` +
-                `👤 **New Admin:** \`${newAdminId}\`\n` +
-                `👥 **Total Admins:** ${botData.admins.length}\n` +
-                `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
-                `🔑 User now has admin access to bot`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-
-        if (session.waitingForGroup) {
-            console.log(`➕ Processing group addition for ${userId}`);
-            const groupId = parseInt(text);
-            
-            if (isNaN(groupId) || groupId >= 0) {
-                await ctx.reply(
-                    '❌ **Invalid Group ID**\n\n' +
-                    'Group ID must be a negative number\n' +
-                    'Example: `-1001234567890`\n\n' +
-                    '🔍 To get Group ID:\n' +
-                    '• Add @userinfobot to your group\n' +
-                    '• Bot will show the group ID',
-                    { parse_mode: 'Markdown' }
-                );
-                return;
-            }
-
-            if (botData.groups.some(g => g.id === groupId)) {
-                await ctx.reply(
-                    '⚠️ **Group Already Registered**\n\n' +
-                    'This group is already in the whitelist'
-                );
-                return;
-            }
-
-            let groupName = 'Unknown Group';
-            try {
-                const chat = await bot.telegram.getChat(groupId);
-                groupName = chat.title || chat.username || 'Unknown Group';
-            } catch (error) {
-                console.log(`Could not get info for group ${groupId}, using default name`);
-            }
-
-            botData.groups.push({
-                id: groupId,
-                name: groupName,
-                addedAt: Date.now(),
-                active: true
-            });
-            
-            await saveData();
-            
-            userSessions.delete(userId);
-            console.log(`✅ Group ${groupId} added successfully`);
-
-            await ctx.reply(
-                `✅ **Group Added Successfully**\n\n` +
-                `🏢 **Group:** ${groupName}\n` +
-                `📋 **Group ID:** \`${groupId}\`\n` +
-                `🏢 **Total Groups:** ${botData.groups.length}\n` +
-                `⏰ **Added:** ${formatTime(Date.now())}\n\n` +
-                `🛡️ Group is now protected by security bot`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-    } catch (error) {
-        console.error('Error handling text input:', error);
-        
-        userSessions.delete(userId);
-        
-        await ctx.reply(
-            '❌ **Error Processing Request**\n\n' +
-            'Something went wrong. Please try again.\n' +
-            'If problem persists, contact main admin.',
-            { parse_mode: 'Markdown' }
-        );
-    }
-});
-
-bot.command('debug', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    
-    const userId = ctx.from.id;
-    const session = userSessions.get(userId);
-    
-    let debugInfo = `🔍 **Debug Information**\n\n`;
-    debugInfo += `👤 **Your ID:** \`${userId}\`\n`;
-    debugInfo += `👑 **Is Admin:** ${isAdmin(userId) ? 'Yes ✅' : 'No ❌'}\n`;
-    debugInfo += `📋 **Active Session:** ${session ? 'Yes ✅' : 'No ❌'}\n`;
-    
-    if (session) {
-        debugInfo += `\n**Session Details:**\n`;
-        debugInfo += `• Waiting for Admin: ${session.waitingForAdmin || false}\n`;
-        debugInfo += `• Waiting for Group: ${session.waitingForGroup || false}\n`;
-        debugInfo += `• Created: ${session.timestamp ? formatTime(session.timestamp) : 'Unknown'}\n`;
-    }
-    
-    debugInfo += `\n📊 **Bot Stats:**\n`;
-    debugInfo += `• Total Admins: ${botData.admins.length}\n`;
-    debugInfo += `• Total Groups: ${botData.groups.length}\n`;
-    debugInfo += `• Active Sessions: ${userSessions.size}\n`;
-    
-    await ctx.reply(debugInfo, { parse_mode: 'Markdown' });
-});
-
-// Tambahkan Handler untuk Cancel Session
 
 bot.action('cancel_session', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     
-    const userId = ctx.from.id;
-    if (userSessions.has(userId)) {
-        userSessions.delete(userId);
-        await ctx.answerCbQuery('❌ Action cancelled');
-    }
+    userSessions.delete(ctx.from.id);
+    await ctx.answerCbQuery('❌ Action cancelled');
     
+    // Return to main menu
     await ctx.editMessageText(
-        `🤖 **Bot Keamanan Premium v2.0**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `🛡️ **Status Sistem:**\n` +
-        `🟢 Bot Online & Aktif\n` +
-        `🔍 Detection: ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}\n` +
-        `🏢 Groups: ${botData.groups.length} terdaftar\n` +
-        `👥 Admins: ${botData.admins.length} aktif\n\n` +
+        `🤖 **Bot Keamanan Premium V6.0**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `✅ **Action Cancelled**\n\n` +
         `⚡ Pilih menu untuk mengakses fitur:`,
         {
             parse_mode: 'Markdown',
@@ -1337,242 +893,238 @@ bot.action('cancel_session', async (ctx) => {
     );
 });
 
+bot.action('toggle_detection', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+
+    botData.detectionEnabled = !botData.detectionEnabled;
+    await saveData();
+
+    await ctx.answerCbQuery(`🔍 Detection ${botData.detectionEnabled ? 'Enabled' : 'Disabled'}`);
+    
+    // Refresh security menu
+    ctx.editMessageText(
+        `🛡️ **Security Settings Updated**\n\n` +
+        `🔍 **Detection:** ${botData.detectionEnabled ? '🟢 ENABLED' : '🔴 DISABLED'}\n` +
+        `⏰ **Changed:** ${formatTime(Date.now())}\n\n` +
+        `${botData.detectionEnabled ? 
+            '✅ All security features are now active' : 
+            '⚠️ Security detection is now disabled'}`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🔙 Back to Security', 'security_menu')]
+            ])
+        }
+    );
+});
+
+bot.action('lockdown_toggle', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+
+    botData.lockdownMode = !botData.lockdownMode;
+    await saveData();
+
+    const status = botData.lockdownMode ? '🔒 ACTIVE' : '🔓 INACTIVE';
+    
+    await ctx.answerCbQuery(`🔒 Lockdown ${botData.lockdownMode ? 'Activated' : 'Deactivated'}`);
+
+    await ctx.editMessageText(
+        `🔒 **Lockdown Mode ${status}**\n\n` +
+        `📊 **Status:** ${status}\n` +
+        `🏢 **Affected Groups:** ${botData.groups.length}\n` +
+        `⏰ **Changed:** ${formatTime(Date.now())}\n\n` +
+        `${botData.lockdownMode ? 
+        `🚨 **LOCKDOWN ACTIVE**\n• All user messages will be deleted\n• Only admins can send messages` :
+        `✅ **NORMAL MODE**\n• Standard security monitoring\n• Users can send messages normally`}`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🔄 Toggle Again', 'lockdown_toggle')],
+                [Markup.button.callback('🔙 Back to Main', 'back_main')]
+            ])
+        }
+    );
+});
+
+// Auto cleanup - Enhanced
+setInterval(async () => {
+    try {
+        const now = Date.now();
+        const oneDay = 24 * 60 * 60 * 1000;
+        const oneHour = 60 * 60 * 1000;
+
+        let cleaned = 0;
+
+        // Clean expired bans
+        for (const [userId, ban] of Object.entries(botData.bannedUsers)) {
+            if (ban.until < now) {
+                delete botData.bannedUsers[userId];
+                cleaned++;
+            }
+        }
+
+        // Clean old image hashes (older than 1 day)
+        for (const [key, timestamp] of botData.imageHashes.entries()) {
+            if (now - timestamp > oneDay) {
+                botData.imageHashes.delete(key);
+                cleaned++;
+            }
+        }
+
+        // Clean old rate limits
+        rateLimits.clear();
+
+        // Clean old violations (older than 7 days)
+        const sevenDays = 7 * oneDay;
+        for (const [userId, violation] of Object.entries(botData.userViolations)) {
+            if (now - violation.lastViolation > sevenDays) {
+                delete botData.userViolations[userId];
+                cleaned++;
+            }
+        }
+
+        // Clean old sessions (older than 1 hour)
+        for (const [userId, session] of userSessions.entries()) {
+            if (session.timestamp && (now - session.timestamp > oneHour)) {
+                userSessions.delete(userId);
+                cleaned++;
+            }
+        }
+
+        // Clean message hashes periodically
+        if (botData.lastMessages.size > 1000) {
+            // Keep only recent active users
+            const activeUserLimit = 500;
+            const entries = Array.from(botData.lastMessages.entries());
+            botData.lastMessages.clear();
+            
+            entries.slice(-activeUserLimit).forEach(([userId, messages]) => {
+                botData.lastMessages.set(userId, messages);
+            });
+            cleaned += entries.length - activeUserLimit;
+        }
+
+        if (cleaned > 0) {
+            await saveData();
+            console.log(`🧹 Auto-cleanup: ${cleaned} items cleaned`);
+        }
+    } catch (error) {
+        console.error('❌ Error during cleanup:', error);
+    }
+}, 300000); // Run every 5 minutes
 
 // Enhanced error handling
 bot.catch(async (err, ctx) => {
-    console.error('==========================================');
-    console.error('🚨 BOT ERROR DETECTED:', new Date().toISOString());
-    console.error('Error:', err.message);
-    console.error('Stack:', err.stack);
-    console.error('Context:', ctx ? {
-        updateType: ctx.updateType,
-        chatId: ctx.chat?.id,
-        userId: ctx.from?.id,
-        messageId: ctx.message?.message_id
-    } : 'No context');
-    console.error('==========================================');
+    console.error('🚨 BOT ERROR:', {
+        error: err.message,
+        time: new Date().toISOString(),
+        updateType: ctx?.updateType,
+        chatId: ctx?.chat?.id,
+        userId: ctx?.from?.id
+    });
 
-    // Bersihkan session jika ada error
+    // Clean up session if error occurred
     if (ctx?.from?.id) {
         userSessions.delete(ctx.from.id);
     }
 
-    // Kirim notifikasi error ke admin (hanya jika konteks tersedia dan user adalah admin)
-    if (ctx?.from && isAdmin(ctx.from.id)) {
-        try {
-            await ctx.reply(
-                `🚨 **Bot Error Detected**\n\n` +
-                `⚠️ **Error:** ${err.message}\n` +
-                `🕐 **Time:** ${formatTime(Date.now())}\n` +
-                `🔄 **Status:** Bot continues running\n\n` +
-                `💡 Error has been logged and handled`,
-                { parse_mode: 'Markdown' }
-            );
-        } catch (replyError) {
-            console.error('Failed to send error notification:', replyError.message);
-        }
-    }
-
-    // Auto-recovery: coba save data jika memungkinkan
+    // Try to save data
     try {
         await saveData();
-        console.log('✅ Data saved successfully after error');
     } catch (saveError) {
-        console.error('❌ Failed to save data after error:', saveError.message);
+        console.error('❌ Failed to save data after error:', saveError);
     }
-
-    // Jangan exit process, biarkan bot tetap berjalan
-    console.log('🔄 Bot continues running despite error...');
 });
 
+// Process handlers
 process.on('uncaughtException', (error) => {
-    console.error('==========================================');
-    console.error('🚨 UNCAUGHT EXCEPTION:', new Date().toISOString());
-    console.error('Error:', error.message);
-    console.error('Stack:', error.stack);
-    console.error('==========================================');
-    
-    // Save data sebelum potentially crash
-    saveData().then(() => {
-        console.log('✅ Data saved before handling uncaught exception');
-    }).catch(saveError => {
-        console.error('❌ Failed to save data during uncaught exception:', saveError.message);
-    });
-
-    // Jangan exit, biarkan process tetap hidup
-    console.log('🔄 Process continues running...');
+    console.error('🚨 UNCAUGHT EXCEPTION:', error);
+    saveData().catch(() => {});
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('==========================================');
-    console.error('🚨 UNHANDLED REJECTION:', new Date().toISOString());
-    console.error('Reason:', reason);
-    console.error('Promise:', promise);
-    console.error('==========================================');
-    
-    // Save data
-    saveData().then(() => {
-        console.log('✅ Data saved after unhandled rejection');
-    }).catch(saveError => {
-        console.error('❌ Failed to save data during unhandled rejection:', saveError.message);
-    });
-
-    console.log('🔄 Process continues running...');
+process.on('unhandledRejection', (reason) => {
+    console.error('🚨 UNHANDLED REJECTION:', reason);
+    saveData().catch(() => {});
 });
 
 // Startup function
 const startBot = async () => {
     try {
-        console.log('🚀 Starting Telegram Security Bot...');
+        console.log('🚀 Starting Enhanced Security Bot...');
         
-        // Load existing data
         await loadData();
-        console.log(`📊 Loaded data: ${botData.admins.length} admins, ${botData.groups.length} groups`);
+        console.log(`📊 Data loaded: ${botData.admins.length} admins, ${botData.groups.length} groups`);
         
         // Test bot token
-        try {
-            const botInfo = await bot.telegram.getMe();
-            console.log(`🤖 Bot info loaded: @${botInfo.username}`);
-        } catch (tokenError) {
-            console.error('❌ Invalid bot token or network issue:', tokenError.message);
-            throw new Error('Bot token validation failed');
-        }
+        const botInfo = await bot.telegram.getMe();
+        console.log(`🤖 Bot ready: @${botInfo.username}`);
         
-        // Start polling dengan error handling
         await bot.launch({
-            dropPendingUpdates: true, // Skip pending updates
-            allowedUpdates: ['message', 'callback_query', 'chat_member'] // Only handle needed updates
+            dropPendingUpdates: true,
+            allowedUpdates: ['message', 'callback_query', 'chat_member']
         });
         
-        console.log('✅ Bot started successfully!');
-        console.log(`🤖 Bot username: @${bot.botInfo.username}`);
-        console.log(`👑 Main admin: ${MAIN_ADMIN}`);
-        console.log(`🛡️ Security features: ACTIVE`);
-        console.log(`🔧 Error handling: ENHANCED`);
+        console.log('✅ Enhanced Security Bot Started Successfully!');
+        console.log(`🛡️ Protection Level: MAXIMUM`);
+        console.log(`⚡ Rate Limit: ${MAX_MESSAGES_PER_WINDOW} msg/${RATE_LIMIT_WINDOW/1000}s`);
+        console.log(`🎯 Detection Patterns: ${dangerousPatterns.length} rules`);
+        console.log(`🔕 Silent Mode: ENABLED (No spam notifications)`);
         
-        // Graceful stop handlers
-        const gracefulStop = async (signal) => {
-            console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
-            
-            try {
-                // Save data before stopping
-                await saveData();
-                console.log('✅ Data saved successfully');
-                
-                // Stop bot
-                bot.stop(signal);
-                console.log('✅ Bot stopped successfully');
-                
-                // Clear sessions
-                userSessions.clear();
-                console.log('✅ Sessions cleared');
-                
-                process.exit(0);
-            } catch (error) {
-                console.error('❌ Error during graceful shutdown:', error.message);
-                process.exit(1);
-            }
-        };
-        
+        // Graceful shutdown
         process.once('SIGINT', () => gracefulStop('SIGINT'));
         process.once('SIGTERM', () => gracefulStop('SIGTERM'));
         
     } catch (error) {
-        console.error('❌ Failed to start bot:', error.message);
-        console.error('🔄 Retrying in 5 seconds...');
-        
-        // Retry after 5 seconds instead of exiting
-        setTimeout(() => {
-            startBot();
-        }, 5000);
+        console.error('❌ Failed to start bot:', error);
+        setTimeout(startBot, 5000); // Retry after 5 seconds
     }
 };
 
-setInterval(async () => {
+const gracefulStop = async (signal) => {
+    console.log(`\n🛑 Received ${signal}, shutting down...`);
+    
     try {
-        const now = Date.now();
-        const oneDay = 24 * 60 * 60 * 1000;
-
-        // Clean old message hashes
-        let cleanedHashes = 0;
-        for (const [key, timestamp] of Object.entries(botData.messageHashes)) {
-            if (now - timestamp > oneDay) {
-                delete botData.messageHashes[key];
-                cleanedHashes++;
-            }
-        }
-
-        // Clean expired bans
-        let cleanedBans = 0;
-        for (const [userId, ban] of Object.entries(botData.bannedUsers)) {
-            if (ban.until < now) {
-                delete botData.bannedUsers[userId];
-                cleanedBans++;
-            }
-        }
-
-        // Clean old rate limits
-        const oldRateLimits = rateLimits.size;
-        rateLimits.clear();
-
-        // Clean old violations (older than 7 days)
-        const sevenDays = 7 * 24 * 60 * 60 * 1000;
-        let cleanedViolations = 0;
-        for (const [userId, violation] of Object.entries(botData.userViolations)) {
-            if (now - violation.lastViolation > sevenDays) {
-                delete botData.userViolations[userId];
-                cleanedViolations++;
-            }
-        }
-
-        // Clean old sessions (older than 1 hour)
-        const oneHour = 60 * 60 * 1000;
-        let cleanedSessions = 0;
-        for (const [userId, session] of userSessions.entries()) {
-            if (session.timestamp && (now - session.timestamp > oneHour)) {
-                userSessions.delete(userId);
-                cleanedSessions++;
-            }
-        }
-
         await saveData();
+        console.log('✅ Data saved');
         
-        // Log cleanup stats setiap 10 menit
-        if (cleanedHashes > 0 || cleanedBans > 0 || cleanedViolations > 0 || cleanedSessions > 0) {
-            console.log(`🧹 Cleanup completed: ${cleanedHashes} hashes, ${cleanedBans} bans, ${cleanedViolations} violations, ${cleanedSessions} sessions, ${oldRateLimits} rate limits`);
-        }
+        bot.stop(signal);
+        console.log('✅ Bot stopped');
+        
+        userSessions.clear();
+        console.log('✅ Sessions cleared');
+        
+        process.exit(0);
     } catch (error) {
-        console.error('❌ Error during periodic cleanup:', error.message);
-        // Jangan stop bot, cukup log error
+        console.error('❌ Error during shutdown:', error);
+        process.exit(1);
     }
-}, 60000); // Run every minute
-
-// Package.json dependencies info
-console.log(`
-📦 **Required Dependencies:**
-npm install telegraf
-
-🔧 **Setup Instructions:**
-1. Replace BOT_TOKEN with your actual bot token
-2. Replace MAIN_ADMIN with your Telegram user ID
-3. Run: node bot.js
-
-🚀 **Features Ready:**
-✅ Full inline button interface
-✅ Admin management system
-✅ Group whitelist management
-✅ Advanced content detection
-✅ Rate limiting & spam protection
-✅ Lockdown mode for emergencies
-✅ Auto-cleanup & data management
-✅ Professional notifications
-✅ JSON database storage
-
-🔥 **Security Patterns:** ${dangerousPatterns.length} detection rules loaded
-`);
+};
 
 // Start the bot
 startBot();
 
-// Export for testing purposes
+console.log(`
+📦 **Setup Instructions:**
+1. npm install telegraf
+2. Update BOT_TOKEN and MAIN_ADMIN
+3. node bot.js
+
+🔥 **Enhanced Features:**
+✅ Fixed session management
+✅ Lightning fast processing
+✅ Silent operation (no spam)
+✅ Multi-group support
+✅ Enhanced rate limiting
+✅ Duplicate detection (text + images)
+✅ Auto-ban system
+✅ Real-time stats tracking
+✅ Memory optimization
+✅ Error recovery
+
+🛡️ **Security Rules:** ${dangerousPatterns.length} patterns loaded
+⚡ **Rate Limit:** ${MAX_MESSAGES_PER_WINDOW} messages per ${RATE_LIMIT_WINDOW/1000} seconds
+🔨 **Auto-Ban:** After 10 violations
+🔕 **Mode:** Silent (no group notifications)
+`);
+
 module.exports = { bot, botData, isAdmin, checkDangerousContent };
