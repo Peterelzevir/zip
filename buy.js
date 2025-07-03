@@ -1,18 +1,29 @@
+//
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 
-// Bot Token - Ganti dengan token bot Anda
-const BOT_TOKEN = '7559754047:AAFkYOw7i6acsYJKfbS6dLKaJWojFL_6aig';
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// =================== CONFIGURATION ===================
+const BOT_TOKEN = '7559754047:AAFkYOw7i6acsYJKfbS6dLKaJWojFL_6aig'; // Ganti dengan token bot Anda
+const ADMIN_IDS = [5988451717, 1290256714]; // Ganti dengan ID admin Anda
+const ADMIN_USERNAME = '@ninz888'; // Username admin
+const REQUIRED_CHANNEL = '@listprojec'; // Channel ID atau username (contoh: @your_channel atau -1001234567890)
+const REQUIRED_CHANNEL_ID = -1001864187252; // ID channel dalam format angka untuk pengecekan membership
 
-// Admin Configuration
-const ADMIN_IDS = [5988451717]; // Ganti dengan ID admin Anda
-const REQUIRED_CHANNEL = '@listprojec'; // Channel wajib join
+// USDT Addresses
 const USDT_ADDRESSES = {
     TRC20: 'TUGeTtQdrMVhHubtYo41fGAE1348oWzLu8',
     BEP20: '0x4f1834cD8e3293c48D3f2d217490d22dCd9BC7D3'
 };
+
+// Default Prices
+const DEFAULT_PRICES = {
+    groups: 7.5,
+    channels: 2
+};
+
+// =================== SETUP ===================
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // Database Files
 const DB_USERS = 'users.json';
@@ -20,6 +31,10 @@ const DB_PRODUCTS = 'products.json';
 const DB_ORDERS = 'orders.json';
 const DB_DEPOSITS = 'deposits.json';
 const DB_SUPPORT = 'support.json';
+const DB_ADMIN = 'admin.json';
+
+// Supported languages
+const SUPPORTED_LANGUAGES = ['en', 'id', 'zh', 'uz', 'ru'];
 
 // Initialize databases
 function initDatabase() {
@@ -28,36 +43,37 @@ function initDatabase() {
         { file: DB_PRODUCTS, default: { 
             groups: { 
                 2023: { 
-                    january: { stock: 0, price: 1 }, february: { stock: 0, price: 1 }, march: { stock: 0, price: 1 },
-                    april: { stock: 0, price: 1 }, may: { stock: 0, price: 1 }, june: { stock: 0, price: 1 },
-                    july: { stock: 0, price: 1 }, august: { stock: 0, price: 1 }, september: { stock: 0, price: 1 },
-                    october: { stock: 0, price: 1 }, november: { stock: 0, price: 1 }, december: { stock: 0, price: 1 }
+                    january: { stock: 0, price: DEFAULT_PRICES.groups }, february: { stock: 0, price: DEFAULT_PRICES.groups }, march: { stock: 0, price: DEFAULT_PRICES.groups },
+                    april: { stock: 0, price: DEFAULT_PRICES.groups }, may: { stock: 0, price: DEFAULT_PRICES.groups }, june: { stock: 0, price: DEFAULT_PRICES.groups },
+                    july: { stock: 0, price: DEFAULT_PRICES.groups }, august: { stock: 0, price: DEFAULT_PRICES.groups }, september: { stock: 0, price: DEFAULT_PRICES.groups },
+                    october: { stock: 0, price: DEFAULT_PRICES.groups }, november: { stock: 0, price: DEFAULT_PRICES.groups }, december: { stock: 0, price: DEFAULT_PRICES.groups }
                 },
                 2024: { 
-                    january: { stock: 0, price: 3 }, february: { stock: 0, price: 3 }, march: { stock: 0, price: 3 },
-                    april: { stock: 0, price: 3 }, may: { stock: 0, price: 3 }, june: { stock: 0, price: 3 },
-                    july: { stock: 0, price: 3 }, august: { stock: 0, price: 3 }, september: { stock: 0, price: 3 },
-                    october: { stock: 0, price: 3 }, november: { stock: 0, price: 3 }, december: { stock: 0, price: 3 }
+                    january: { stock: 0, price: DEFAULT_PRICES.groups }, february: { stock: 0, price: DEFAULT_PRICES.groups }, march: { stock: 0, price: DEFAULT_PRICES.groups },
+                    april: { stock: 0, price: DEFAULT_PRICES.groups }, may: { stock: 0, price: DEFAULT_PRICES.groups }, june: { stock: 0, price: DEFAULT_PRICES.groups },
+                    july: { stock: 0, price: DEFAULT_PRICES.groups }, august: { stock: 0, price: DEFAULT_PRICES.groups }, september: { stock: 0, price: DEFAULT_PRICES.groups },
+                    october: { stock: 0, price: DEFAULT_PRICES.groups }, november: { stock: 0, price: DEFAULT_PRICES.groups }, december: { stock: 0, price: DEFAULT_PRICES.groups }
                 }
             }, 
             channels: {
                 2022: { 
-                    january: { stock: 0, price: 1 }, february: { stock: 0, price: 1 }, march: { stock: 0, price: 1 },
-                    april: { stock: 0, price: 1 }, may: { stock: 0, price: 1 }, june: { stock: 0, price: 1 },
-                    july: { stock: 0, price: 1 }, august: { stock: 0, price: 1 }, september: { stock: 0, price: 1 },
-                    october: { stock: 0, price: 1 }, november: { stock: 0, price: 1 }, december: { stock: 0, price: 1 }
+                    january: { stock: 0, price: DEFAULT_PRICES.channels }, february: { stock: 0, price: DEFAULT_PRICES.channels }, march: { stock: 0, price: DEFAULT_PRICES.channels },
+                    april: { stock: 0, price: DEFAULT_PRICES.channels }, may: { stock: 0, price: DEFAULT_PRICES.channels }, june: { stock: 0, price: DEFAULT_PRICES.channels },
+                    july: { stock: 0, price: DEFAULT_PRICES.channels }, august: { stock: 0, price: DEFAULT_PRICES.channels }, september: { stock: 0, price: DEFAULT_PRICES.channels },
+                    october: { stock: 0, price: DEFAULT_PRICES.channels }, november: { stock: 0, price: DEFAULT_PRICES.channels }, december: { stock: 0, price: DEFAULT_PRICES.channels }
                 },
                 2023: { 
-                    january: { stock: 0, price: 1 }, february: { stock: 0, price: 1 }, march: { stock: 0, price: 1 },
-                    april: { stock: 0, price: 1 }, may: { stock: 0, price: 1 }, june: { stock: 0, price: 1 },
-                    july: { stock: 0, price: 1 }, august: { stock: 0, price: 1 }, september: { stock: 0, price: 1 },
-                    october: { stock: 0, price: 1 }, november: { stock: 0, price: 1 }, december: { stock: 0, price: 1 }
+                    january: { stock: 0, price: DEFAULT_PRICES.channels }, february: { stock: 0, price: DEFAULT_PRICES.channels }, march: { stock: 0, price: DEFAULT_PRICES.channels },
+                    april: { stock: 0, price: DEFAULT_PRICES.channels }, may: { stock: 0, price: DEFAULT_PRICES.channels }, june: { stock: 0, price: DEFAULT_PRICES.channels },
+                    july: { stock: 0, price: DEFAULT_PRICES.channels }, august: { stock: 0, price: DEFAULT_PRICES.channels }, september: { stock: 0, price: DEFAULT_PRICES.channels },
+                    october: { stock: 0, price: DEFAULT_PRICES.channels }, november: { stock: 0, price: DEFAULT_PRICES.channels }, december: { stock: 0, price: DEFAULT_PRICES.channels }
                 }
             }
         } },
         { file: DB_ORDERS, default: {} },
         { file: DB_DEPOSITS, default: {} },
-        { file: DB_SUPPORT, default: {} }
+        { file: DB_SUPPORT, default: {} },
+        { file: DB_ADMIN, default: { active_supports: {} } }
     ];
 
     databases.forEach(db => {
@@ -89,6 +105,7 @@ function writeDB(file, data) {
 const translations = {
     en: {
         welcome: "🎉 Welcome to TeleMarket Bot!\n\nPlease select your language:",
+        welcome_desc: "📈 Complete solution for Telegram business!\n📦 Groups, Channels ready accounts sale\n⚡ Fast | Reliable | Modern\n🔝 Reach the top with us!",
         main_menu: "🏠 You are in the main menu",
         wallet: "💳 Wallet",
         shop: "🛍️ Shop",
@@ -135,6 +152,11 @@ const translations = {
         transfer_to: "💳 Transfer to address:",
         with_amount: "💰 Amount:",
         admin_ready_made: "✅ Ready-made accounts feature - Contact admin directly",
+        contact_admin: "💬 Contact Admin",
+        order_success: "✅ Order Successful!",
+        order_details: "📦 Order Details:",
+        order_id: "🆔 Order ID:",
+        new_order: "🔔 New Order!",
         months: {
             january: "January", february: "February", march: "March", april: "April",
             may: "May", june: "June", july: "July", august: "August", 
@@ -157,7 +179,7 @@ If you have any issues or questions, please contact the admins.
 ⚠️ One service — an unlimited number of orders:
 You can place an unlimited number of orders at the same time.
 
-❗ For errors or issues: @Sanjarbek_2557`,
+❗ For errors or issues: ${ADMIN_USERNAME}`,
         help_text: `🆘 Help - How to use the bot:
 
 1️⃣ First, select your language
@@ -172,6 +194,7 @@ You can place an unlimited number of orders at the same time.
     },
     id: {
         welcome: "🎉 Selamat datang di TeleMarket Bot!\n\nSilakan pilih bahasa Anda:",
+        welcome_desc: "📈 Solusi lengkap untuk bisnis Telegram!\n📦 Grup, Channel akun siap pakai dijual\n⚡ Cepat | Terpercaya | Modern\n🔝 Raih puncak bersama kami!",
         main_menu: "🏠 Anda berada di menu utama",
         wallet: "💳 Dompet",
         shop: "🛍️ Toko",
@@ -218,6 +241,11 @@ You can place an unlimited number of orders at the same time.
         transfer_to: "💳 Transfer ke alamat:",
         with_amount: "💰 Jumlah:",
         admin_ready_made: "✅ Fitur akun siap pakai - Hubungi admin langsung",
+        contact_admin: "💬 Hubungi Admin",
+        order_success: "✅ Pesanan Berhasil!",
+        order_details: "📦 Detail Pesanan:",
+        order_id: "🆔 ID Pesanan:",
+        new_order: "🔔 Pesanan Baru!",
         months: {
             january: "Januari", february: "Februari", march: "Maret", april: "April",
             may: "Mei", june: "Juni", july: "Juli", august: "Agustus", 
@@ -240,7 +268,7 @@ Jika Anda memiliki masalah atau pertanyaan, silakan hubungi admin.
 ⚠️ Satu layanan — jumlah pesanan tak terbatas:
 Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
 
-❗ Untuk kesalahan atau masalah: @Sanjarbek_2557`,
+❗ Untuk kesalahan atau masalah: ${ADMIN_USERNAME}`,
         help_text: `🆘 Bantuan - Cara menggunakan bot:
 
 1️⃣ Pertama, pilih bahasa Anda
@@ -255,6 +283,7 @@ Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
     },
     zh: {
         welcome: "🎉 欢迎使用 TeleMarket Bot！\n\n请选择您的语言：",
+        welcome_desc: "📈 Telegram 业务完整解决方案！\n📦 群组、频道现成账户销售\n⚡ 快速 | 可靠 | 现代\n🔝 与我们一起达到顶峰！",
         main_menu: "🏠 您在主菜单中",
         wallet: "💳 钱包",
         shop: "🛍️ 商店",
@@ -301,6 +330,11 @@ Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
         transfer_to: "💳 转账到地址：",
         with_amount: "💰 金额：",
         admin_ready_made: "✅ 现成账户功能 - 直接联系管理员",
+        contact_admin: "💬 联系管理员",
+        order_success: "✅ 订单成功！",
+        order_details: "📦 订单详情：",
+        order_id: "🆔 订单ID：",
+        new_order: "🔔 新订单！",
         months: {
             january: "一月", february: "二月", march: "三月", april: "四月",
             may: "五月", june: "六月", july: "七月", august: "八月", 
@@ -323,7 +357,7 @@ Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
 ⚠️ 一项服务 — 无限数量的订单：
 您可以同时下无限数量的订单。
 
-❗ 如有错误或问题：@Sanjarbek_2557`,
+❗ 如有错误或问题：${ADMIN_USERNAME}`,
         help_text: `🆘 帮助 - 如何使用机器人：
 
 1️⃣ 首先，选择您的语言
@@ -338,6 +372,7 @@ Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
     },
     uz: {
         welcome: "🎉 TeleMarket Bot'ga xush kelibsiz!\n\nIltimos, tilingizni tanlang:",
+        welcome_desc: "📈 Telegram biznes uchun to'liq yechim!\n📦 Guruhlar, Kanallar tayyor akkauntlar sotiladi\n⚡ Tez | Ishonchli | Zamonaviy\n🔝 Biz bilan eng yuqoriga chiqing!",
         main_menu: "🏠 Siz asosiy menyudasiz",
         wallet: "💳 Hamyon",
         shop: "🛍️ Do'kon",
@@ -384,6 +419,11 @@ Anda dapat melakukan pesanan dalam jumlah tak terbatas secara bersamaan.
         transfer_to: "💳 Manzilga o'tkazish:",
         with_amount: "💰 Miqdor:",
         admin_ready_made: "✅ Tayyor akkauntlar xususiyati - Admin bilan bevosita bog'laning",
+        contact_admin: "💬 Admin bilan bog'laning",
+        order_success: "✅ Buyurtma muvaffaqiyatli!",
+        order_details: "📦 Buyurtma tafsilotlari:",
+        order_id: "🆔 Buyurtma ID:",
+        new_order: "🔔 Yangi buyurtma!",
         months: {
             january: "Yanvar", february: "Fevral", march: "Mart", april: "Aprel",
             may: "May", june: "Iyun", july: "Iyul", august: "Avgust", 
@@ -406,7 +446,7 @@ Agar sizda muammolar yoki savollar bo'lsa, adminlar bilan bog'laning.
 ⚠️ Bitta xizmat — cheksiz buyurtmalar:
 Siz bir vaqtning o'zida cheksiz miqdorda buyurtma berishingiz mumkin.
 
-❗ Xatolar yoki muammolar uchun: @Sanjarbek_2557`,
+❗ Xatolar yoki muammolar uchun: ${ADMIN_USERNAME}`,
         help_text: `🆘 Yordam - Botdan qanday foydalanish:
 
 1️⃣ Avval, tilingizni tanlang
@@ -421,6 +461,7 @@ Siz bir vaqtning o'zida cheksiz miqdorda buyurtma berishingiz mumkin.
     },
     ru: {
         welcome: "🎉 Добро пожаловать в TeleMarket Bot!\n\nПожалуйста, выберите ваш язык:",
+        welcome_desc: "📈 Полное решение для Telegram бизнеса!\n📦 Группы, Каналы готовые аккаунты на продажу\n⚡ Быстро | Надежно | Современно\n🔝 Достигните вершины с нами!",
         main_menu: "🏠 Вы находитесь в главном меню",
         wallet: "💳 Кошелек",
         shop: "🛍️ Магазин",
@@ -467,6 +508,11 @@ Siz bir vaqtning o'zida cheksiz miqdorda buyurtma berishingiz mumkin.
         transfer_to: "💳 Перевести на адрес:",
         with_amount: "💰 Сумма:",
         admin_ready_made: "✅ Функция готовых аккаунтов - Свяжитесь с администратором напрямую",
+        contact_admin: "💬 Связаться с администратором",
+        order_success: "✅ Заказ успешен!",
+        order_details: "📦 Детали заказа:",
+        order_id: "🆔 ID заказа:",
+        new_order: "🔔 Новый заказ!",
         months: {
             january: "Январь", february: "Февраль", march: "Март", april: "Апрель",
             may: "Май", june: "Июнь", july: "Июль", august: "Август", 
@@ -489,7 +535,7 @@ Siz bir vaqtning o'zida cheksiz miqdorda buyurtma berishingiz mumkin.
 ⚠️ Одна услуга — неограниченное количество заказов:
 Вы можете размещать неограниченное количество заказов одновременно.
 
-❗ При ошибках или проблемах: @Sanjarbek_2557`,
+❗ При ошибках или проблемах: ${ADMIN_USERNAME}`,
         help_text: `🆘 Помощь - Как использовать бота:
 
 1️⃣ Сначала выберите ваш язык
@@ -508,6 +554,11 @@ Siz bir vaqtning o'zida cheksiz miqdorda buyurtma berishingiz mumkin.
 function getText(userId, key) {
     const users = readDB(DB_USERS);
     const userLang = users[userId]?.language || 'en';
+    
+    if (!SUPPORTED_LANGUAGES.includes(userLang)) {
+        return translations['en'][key] || key;
+    }
+    
     return translations[userLang][key] || translations['en'][key] || key;
 }
 
@@ -518,11 +569,13 @@ function getUser(userId) {
         users[userId] = {
             id: userId,
             language: 'en',
+            language_set: false,
             balance: 0,
             deposited: 0,
             spent: 0,
             orders: 0,
-            joined: Date.now()
+            joined: Date.now(),
+            state: null
         };
         writeDB(DB_USERS, users);
     }
@@ -536,10 +589,15 @@ function updateUser(userId, data) {
     writeDB(DB_USERS, users);
 }
 
+// Check if user is admin
+function isAdmin(userId) {
+    return ADMIN_IDS.includes(userId);
+}
+
 // Check if user is member of required channel
 async function checkChannelMembership(userId) {
     try {
-        const member = await bot.getChatMember(REQUIRED_CHANNEL, userId);
+        const member = await bot.getChatMember(REQUIRED_CHANNEL_ID, userId);
         return ['member', 'administrator', 'creator'].includes(member.status);
     } catch (error) {
         console.error('Error checking channel membership:', error);
@@ -570,9 +628,6 @@ function getLanguageKeyboard() {
 
 // Generate main menu keyboard
 function getMainMenuKeyboard(userId) {
-    const user = getUser(userId);
-    const lang = user.language;
-    
     return {
         reply_markup: {
             keyboard: [
@@ -726,7 +781,6 @@ function getStatistics() {
 // Format statistics message
 function formatStatistics(userId) {
     const stats = getStatistics();
-    const user = getUser(userId);
     
     let message = `📊 ${getText(userId, 'total_users')} ${stats.totalUsers} pcs\n`;
     message += `👥 ${getText(userId, 'group_orders')} ${stats.totalGroupOrders} pcs\n\n`;
@@ -734,21 +788,34 @@ function formatStatistics(userId) {
     // Groups statistics
     message += `—————— 2024 ——————\n`;
     message += `📅 Groups: ${stats.products.groups['2024'] ? Object.values(stats.products.groups['2024']).reduce((sum, month) => sum + month.stock, 0) : 0} pcs\n`;
-    message += `💰 Price: ${stats.products.groups['2024'] ? stats.products.groups['2024'].january.price : 3} USDT\n\n`;
+    message += `💰 Price: ${stats.products.groups['2024'] ? stats.products.groups['2024'].january.price : DEFAULT_PRICES.groups} USDT\n\n`;
     
     // Channels statistics
     message += `—————— 2022 ——————\n`;
     message += `📅 Channels: ${stats.products.channels['2022'] ? Object.values(stats.products.channels['2022']).reduce((sum, month) => sum + month.stock, 0) : 0} pcs\n`;
-    message += `💰 Price: ${stats.products.channels['2022'] ? stats.products.channels['2022'].january.price : 1} USDT\n\n`;
+    message += `💰 Price: ${stats.products.channels['2022'] ? stats.products.channels['2022'].january.price : DEFAULT_PRICES.channels} USDT\n\n`;
     
     message += `—————— 2023 ——————\n`;
     message += `📅 Channels: ${stats.products.channels['2023'] ? Object.values(stats.products.channels['2023']).reduce((sum, month) => sum + month.stock, 0) : 0} pcs\n`;
-    message += `💰 Price: ${stats.products.channels['2023'] ? stats.products.channels['2023'].january.price : 1} USDT`;
+    message += `💰 Price: ${stats.products.channels['2023'] ? stats.products.channels['2023'].january.price : DEFAULT_PRICES.channels} USDT`;
     
     return message;
 }
 
-// Initialize database
+// Send welcome message with description
+async function sendWelcomeMessage(userId) {
+    const user = getUser(userId);
+    
+    // Send description first
+    await bot.sendMessage(userId, `❓ Apa yang dapat bot ini lakukan?\n\n${getText(userId, 'welcome_desc')}`);
+    
+    // Then send main menu
+    setTimeout(() => {
+        bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
+    }, 1000);
+}
+
+// Initialize database and start bot
 initDatabase();
 
 // Set commands
@@ -784,7 +851,7 @@ bot.onText(/\/start/, async (msg) => {
         return;
     }
     
-    bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
+    await sendWelcomeMessage(userId);
 });
 
 // Handle /help command
@@ -793,538 +860,924 @@ bot.onText(/\/help/, (msg) => {
     bot.sendMessage(userId, getText(userId, 'help_text'));
 });
 
+// Admin Commands
+bot.onText(/\/admin/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ You are not authorized to use admin commands.');
+        return;
+    }
+    
+    const adminMenu = `🔧 Admin Panel
+
+📦 Product Management:
+/addstock [type] [year] [month] [amount] - Add stock
+/setprice [type] [year] [price] - Set price for year
+/addyear [type] [year] - Add new year
+/removeyear [type] [year] - Remove year
+/products - View all products
+
+👥 User Management:
+/users - View all users
+/balance [userId] [amount] - Set user balance
+/broadcast [message] - Send message to all users
+
+📊 Statistics:
+/stats - Detailed statistics
+/orders - View all orders
+
+Example:
+/addstock groups 2024 january 100
+/setprice groups 2024 8.5
+/addyear groups 2025`;
+
+    bot.sendMessage(userId, adminMenu);
+});
+
+// Add stock command
+bot.onText(/\/addstock (.+) (\d+) (\w+) (\d+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year, month, amount] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type]) {
+        bot.sendMessage(userId, '❌ Invalid type. Use: groups or channels');
+        return;
+    }
+    
+    if (!products[type][year]) {
+        bot.sendMessage(userId, '❌ Year not found. Add year first with /addyear');
+        return;
+    }
+    
+    if (!products[type][year][month]) {
+        bot.sendMessage(userId, '❌ Invalid month.');
+        return;
+    }
+    
+    products[type][year][month].stock += parseInt(amount);
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Added ${amount} stock to ${type} ${year} ${month}\nNew stock: ${products[type][year][month].stock}`);
+});
+
+// Set price command
+bot.onText(/\/setprice (.+) (\d+) ([\d.]+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year, price] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type] || !products[type][year]) {
+        bot.sendMessage(userId, '❌ Type or year not found.');
+        return;
+    }
+    
+    const newPrice = parseFloat(price);
+    
+    // Update all months for that year
+    Object.keys(products[type][year]).forEach(month => {
+        products[type][year][month].price = newPrice;
+    });
+    
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Set price for ${type} ${year} to ${newPrice}`);
+});
+
+// Add year command
+bot.onText(/\/addyear (.+) (\d+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type]) {
+        bot.sendMessage(userId, '❌ Invalid type. Use: groups or channels');
+        return;
+    }
+    
+    if (products[type][year]) {
+        bot.sendMessage(userId, '❌ Year already exists.');
+        return;
+    }
+    
+    const defaultPrice = type === 'groups' ? DEFAULT_PRICES.groups : DEFAULT_PRICES.channels;
+    
+    products[type][year] = {
+        january: { stock: 0, price: defaultPrice },
+        february: { stock: 0, price: defaultPrice },
+        march: { stock: 0, price: defaultPrice },
+        april: { stock: 0, price: defaultPrice },
+        may: { stock: 0, price: defaultPrice },
+        june: { stock: 0, price: defaultPrice },
+        july: { stock: 0, price: defaultPrice },
+        august: { stock: 0, price: defaultPrice },
+        september: { stock: 0, price: defaultPrice },
+        october: { stock: 0, price: defaultPrice },
+        november: { stock: 0, price: defaultPrice },
+        december: { stock: 0, price: defaultPrice }
+    };
+    
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Added year ${year} for ${type} with default price ${defaultPrice}`);
+});
+
+// Remove year command
+bot.onText(/\/removeyear (.+) (\d+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, type, year] = match;
+    const products = readDB(DB_PRODUCTS);
+    
+    if (!products[type] || !products[type][year]) {
+        bot.sendMessage(userId, '❌ Type or year not found.');
+        return;
+    }
+    
+    delete products[type][year];
+    writeDB(DB_PRODUCTS, products);
+    
+    bot.sendMessage(userId, `✅ Removed year ${year} from ${type}`);
+});
+
+// View products command
+bot.onText(/\/products/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const products = readDB(DB_PRODUCTS);
+    let message = '📦 All Products:\n\n';
+    
+    Object.keys(products).forEach(type => {
+        message += `📂 ${type.toUpperCase()}:\n`;
+        Object.keys(products[type]).forEach(year => {
+            const totalStock = Object.values(products[type][year]).reduce((sum, month) => sum + month.stock, 0);
+            const price = products[type][year].january.price;
+            message += `  ${year}: ${totalStock} pcs @ ${price}\n`;
+        });
+        message += '\n';
+    });
+    
+    bot.sendMessage(userId, message);
+});
+
+// View users command
+bot.onText(/\/users/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const users = readDB(DB_USERS);
+    const totalUsers = Object.keys(users).length;
+    let totalBalance = 0;
+    let totalDeposited = 0;
+    
+    Object.values(users).forEach(user => {
+        totalBalance += user.balance || 0;
+        totalDeposited += user.deposited || 0;
+    });
+    
+    const message = `👥 User Statistics:
+    
+Total Users: ${totalUsers}
+Total Balance: ${totalBalance}
+Total Deposited: ${totalDeposited}
+Average Balance: ${(totalBalance / totalUsers).toFixed(2)}
+
+Recent Users:
+${Object.values(users).slice(-5).map(user => 
+    `${user.id}: ${user.balance} (${user.language})`
+).join('\n')}`;
+    
+    bot.sendMessage(userId, message);
+});
+
+// Set user balance
+bot.onText(/\/balance (\d+) ([\d.]+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, targetUserId, amount] = match;
+    const newBalance = parseFloat(amount);
+    
+    updateUser(parseInt(targetUserId), { balance: newBalance });
+    
+    bot.sendMessage(userId, `✅ Set user ${targetUserId} balance to ${newBalance}`);
+    bot.sendMessage(parseInt(targetUserId), `💰 Your balance has been updated to ${newBalance} by admin.`);
+});
+
+// Broadcast command
+bot.onText(/\/broadcast (.+)/, (msg, match) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const [, message] = match;
+    const users = readDB(DB_USERS);
+    
+    let sent = 0;
+    let failed = 0;
+    
+    Object.keys(users).forEach(async (targetUserId) => {
+        try {
+            await bot.sendMessage(parseInt(targetUserId), `📢 Admin Broadcast:\n\n${message}`);
+            sent++;
+        } catch (error) {
+            failed++;
+        }
+    });
+    
+    setTimeout(() => {
+        bot.sendMessage(userId, `📊 Broadcast Results:\n✅ Sent: ${sent}\n❌ Failed: ${failed}`);
+    }, 2000);
+});
+
+// Detailed stats command
+bot.onText(/\/stats/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const users = readDB(DB_USERS);
+    const orders = readDB(DB_ORDERS);
+    const deposits = readDB(DB_DEPOSITS);
+    
+    const totalRevenue = Object.values(orders).reduce((sum, order) => sum + (order.total || 0), 0);
+    const pendingDeposits = Object.values(deposits).filter(d => d.status === 'pending').length;
+    const approvedDeposits = Object.values(deposits).filter(d => d.status === 'approved').length;
+    
+    const message = `📊 Detailed Statistics:
+
+👥 Users: ${Object.keys(users).length}
+💰 Total Revenue: ${totalRevenue}
+📋 Total Orders: ${Object.keys(orders).length}
+💳 Pending Deposits: ${pendingDeposits}
+✅ Approved Deposits: ${approvedDeposits}
+
+Recent Orders:
+${Object.values(orders).slice(-3).map(order => 
+    `${order.id}: ${order.type} ${order.total}`
+).join('\n')}`;
+    
+    bot.sendMessage(userId, message);
+});
+
+// View all orders
+bot.onText(/\/orders/, (msg) => {
+    const userId = msg.from.id;
+    
+    if (!isAdmin(userId)) {
+        bot.sendMessage(userId, '❌ Not authorized.');
+        return;
+    }
+    
+    const orders = readDB(DB_ORDERS);
+    const recentOrders = Object.values(orders).slice(-10);
+    
+    let message = '📋 Recent Orders (Last 10):\n\n';
+    
+    recentOrders.forEach(order => {
+        message += `🆔 ${order.id}\n`;
+        message += `👤 User: ${order.userId}\n`;
+        message += `📦 ${order.type} ${order.year} ${order.month}\n`;
+        message += `🔢 Qty: ${order.quantity} | 💰 ${order.total}\n`;
+        message += `👤 @${order.username}\n`;
+        message += `📅 ${new Date(order.created_at).toLocaleString()}\n\n`;
+    });
+    
+    bot.sendMessage(userId, message.substring(0, 4000)); // Telegram message limit
+});
+
 // Handle callback queries
 bot.on('callback_query', async (query) => {
     const userId = query.from.id;
     const data = query.data;
     const messageId = query.message.message_id;
     
-    // Handle language selection
-    if (data.startsWith('lang_')) {
-        const lang = data.split('_')[1];
-        updateUser(userId, { language: lang, language_set: true });
-        
-        bot.editMessageText(translations[lang].welcome, {
-            chat_id: userId,
-            message_id: messageId,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '✅ Language Selected', callback_data: 'lang_selected' }]
-                ]
+    try {
+        // Handle language selection
+        if (data.startsWith('lang_')) {
+            const lang = data.split('_')[1];
+            
+            if (!SUPPORTED_LANGUAGES.includes(lang)) {
+                bot.answerCallbackQuery(query.id, { text: 'Invalid language selected', show_alert: true });
+                return;
             }
-        });
+            
+            updateUser(userId, { language: lang, language_set: true });
+            
+            bot.editMessageText(getText(userId, 'welcome'), {
+                chat_id: userId,
+                message_id: messageId,
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '✅ Language Selected', callback_data: 'lang_selected' }]
+                    ]
+                }
+            });
+            
+            setTimeout(async () => {
+                try {
+                    await bot.deleteMessage(userId, messageId);
+                } catch (e) {
+                    console.log('Could not delete message:', e.message);
+                }
+                
+                const isMember = await checkChannelMembership(userId);
+                if (!isMember) {
+                    bot.sendMessage(userId, getText(userId, 'join_channel'), {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: getText(userId, 'join_button'), url: `https://t.me/${REQUIRED_CHANNEL.replace('@', '')}` }
+                                ],
+                                [
+                                    { text: getText(userId, 'check_button'), callback_data: 'check_membership' }
+                                ]
+                            ]
+                        }
+                    });
+                } else {
+                    await sendWelcomeMessage(userId);
+                }
+            }, 2000);
+            
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
         
-        setTimeout(() => {
-            bot.deleteMessage(userId, messageId);
-            bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
-        }, 2000);
-        return;
-    }
-    
-    // Check membership
-    if (data === 'check_membership') {
-        const isMember = await checkChannelMembership(userId);
-        if (isMember) {
+        // Check membership
+        if (data === 'check_membership') {
+            const isMember = await checkChannelMembership(userId);
+            if (isMember) {
+                bot.editMessageText(getText(userId, 'main_menu'), {
+                    chat_id: userId,
+                    message_id: messageId
+                });
+                setTimeout(async () => {
+                    try {
+                        await bot.deleteMessage(userId, messageId);
+                    } catch (e) {
+                        console.log('Could not delete message:', e.message);
+                    }
+                    await sendWelcomeMessage(userId);
+                }, 1000);
+            } else {
+                bot.answerCallbackQuery(query.id, { text: getText(userId, 'not_member'), show_alert: true });
+            }
+            return;
+        }
+        
+        // Handle topup button
+        if (data === 'show_topup') {
+            bot.editMessageText(getText(userId, 'select_amount'), {
+                chat_id: userId,
+                message_id: messageId,
+                ...getTopupKeyboard(userId)
+            });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        // Handle topup amounts
+        if (data.startsWith('topup_')) {
+            const amount = data.split('_')[1];
+            
+            if (amount === 'custom') {
+                bot.editMessageText(getText(userId, 'custom_amount'), {
+                    chat_id: userId,
+                    message_id: messageId
+                });
+                updateUser(userId, { state: 'waiting_custom_amount' });
+                bot.answerCallbackQuery(query.id);
+                return;
+            }
+            
+            const numAmount = parseInt(amount);
+            if (numAmount >= 1) {
+                updateUser(userId, { pending_deposit: numAmount });
+                bot.editMessageText(getText(userId, 'network_select'), {
+                    chat_id: userId,
+                    message_id: messageId,
+                    ...getNetworkKeyboard(userId)
+                });
+            }
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        // Handle network selection
+        if (data.startsWith('network_')) {
+            const network = data.split('_')[1];
+            const user = getUser(userId);
+            const amount = user.pending_deposit;
+            
+            let message = `${getText(userId, 'transfer_to')} ${USDT_ADDRESSES[network]}\n\n`;
+            message += `${getText(userId, 'with_amount')} ${amount} USDT\n\n`;
+            message += getText(userId, 'send_proof');
+            
+            bot.editMessageText(message, {
+                chat_id: userId,
+                message_id: messageId,
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'confirm'), callback_data: 'confirm_transfer' }]
+                    ]
+                }
+            });
+            
+            updateUser(userId, { state: 'waiting_transfer_proof', selected_network: network });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        // Handle transfer confirmation
+        if (data === 'confirm_transfer') {
+            bot.editMessageText(getText(userId, 'send_proof'), {
+                chat_id: userId,
+                message_id: messageId
+            });
+            updateUser(userId, { state: 'waiting_transfer_proof' });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        // Handle shop type selection
+        if (data === 'shop_groups' || data === 'shop_channels') {
+            const type = data.split('_')[1];
+            updateUser(userId, { shop_type: type });
+            
+            bot.editMessageText(getText(userId, 'select_year'), {
+                chat_id: userId,
+                message_id: messageId,
+                ...getYearKeyboard(type)
+            });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        // Handle year selection
+        if (data.startsWith('year_')) {
+            const year = data.split('_')[1];
+            const user = getUser(userId);
+            
+            updateUser(userId, { shop_year: year });
+            
+            bot.editMessageText(getText(userId, 'select_month'), {
+                chat_id: userId,
+                message_id: messageId,
+                ...getMonthKeyboard(userId, user.shop_type, year)
+            });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        // Handle month selection
+        if (data.startsWith('month_')) {
+            const month = data.split('_')[1];
+            const user = getUser(userId);
+            
+            updateUser(userId, { shop_month: month });
+            
+            bot.editMessageText(getText(userId, 'enter_username'), {
+                chat_id: userId,
+                message_id: messageId
+            });
+            
+            updateUser(userId, { state: 'waiting_username' });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        // Handle username confirmation
+        if (data === 'confirm_username') {
+            const user = getUser(userId);
+            const products = readDB(DB_PRODUCTS);
+            const product = products[user.shop_type][user.shop_year][user.shop_month];
+            
+            let message = `💰 ${getText(userId, 'group_price')} ${product.price} USDT\n\n`;
+            message += getText(userId, 'enter_count');
+            
+            bot.editMessageText(message, {
+                chat_id: userId,
+                message_id: messageId
+            });
+            
+            updateUser(userId, { state: 'waiting_quantity' });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
+        
+        if (data === 'cancel_username') {
             bot.editMessageText(getText(userId, 'main_menu'), {
                 chat_id: userId,
                 message_id: messageId
             });
-            setTimeout(() => {
-                bot.deleteMessage(userId, messageId);
-                bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
-            }, 1000);
-        } else {
-            bot.answerCallbackQuery(query.id, { text: getText(userId, 'not_member'), show_alert: true });
-        }
-        return;
-    }
-    
-    // Handle topup amounts
-    if (data.startsWith('topup_')) {
-        const amount = data.split('_')[1];
-        
-        if (amount === 'custom') {
-            bot.editMessageText(getText(userId, 'custom_amount'), {
-                chat_id: userId,
-                message_id: messageId
-            });
-            updateUser(userId, { state: 'waiting_custom_amount' });
+            updateUser(userId, { state: null });
+            bot.answerCallbackQuery(query.id);
             return;
         }
         
-        const numAmount = parseInt(amount);
-        if (numAmount >= 1) {
-            updateUser(userId, { pending_deposit: numAmount });
-            bot.editMessageText(getText(userId, 'network_select'), {
+        // Handle statistics update
+        if (data === 'update_stats') {
+            bot.editMessageText(formatStatistics(userId), {
                 chat_id: userId,
                 message_id: messageId,
-                ...getNetworkKeyboard(userId)
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'update'), callback_data: 'update_stats' }]
+                    ]
+                }
             });
+            bot.answerCallbackQuery(query.id);
+            return;
         }
-        return;
-    }
-    
-    // Handle network selection
-    if (data.startsWith('network_')) {
-        const network = data.split('_')[1];
-        const user = getUser(userId);
-        const amount = user.pending_deposit;
         
-        let message = `${getText(userId, 'transfer_to')} ${USDT_ADDRESSES[network]}\n\n`;
-        message += `${getText(userId, 'with_amount')} ${amount} USDT\n\n`;
-        message += getText(userId, 'send_proof');
-        
-        bot.editMessageText(message, {
-            chat_id: userId,
-            message_id: messageId,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: getText(userId, 'confirm'), callback_data: 'confirm_transfer' }]
-                ]
+        // Handle deposit approval (admin only)
+        if (data.startsWith('approve_deposit_') && isAdmin(userId)) {
+            const depositId = data.split('_')[2];
+            const deposits = readDB(DB_DEPOSITS);
+            
+            if (deposits[depositId]) {
+                const deposit = deposits[depositId];
+                const targetUser = getUser(deposit.userId);
+                
+                // Add balance to user
+                updateUser(deposit.userId, { 
+                    balance: targetUser.balance + deposit.amount,
+                    deposited: targetUser.deposited + deposit.amount
+                });
+                
+                // Mark deposit as approved
+                deposits[depositId].status = 'approved';
+                deposits[depositId].approved_at = Date.now();
+                writeDB(DB_DEPOSITS, deposits);
+                
+                // Notify user
+                bot.sendMessage(deposit.userId, `✅ Your deposit of ${deposit.amount} USDT has been approved!`);
+                
+                // Update admin message
+                bot.editMessageText(`✅ Deposit approved!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`, {
+                    chat_id: userId,
+                    message_id: messageId
+                });
             }
-        });
+            bot.answerCallbackQuery(query.id);
+            return;
+        }
         
-        updateUser(userId, { state: 'waiting_transfer_proof', selected_network: network });
-        return;
-    }
-    
-    // Handle transfer confirmation
-    if (data === 'confirm_transfer') {
-        bot.editMessageText(getText(userId, 'send_proof'), {
-            chat_id: userId,
-            message_id: messageId
-        });
-        updateUser(userId, { state: 'waiting_transfer_proof' });
-        return;
-    }
-    
-    // Handle shop type selection
-    if (data === 'shop_groups' || data === 'shop_channels') {
-        const type = data.split('_')[1];
-        updateUser(userId, { shop_type: type });
-        
-        bot.editMessageText(getText(userId, 'select_year'), {
-            chat_id: userId,
-            message_id: messageId,
-            ...getYearKeyboard(type)
-        });
-        return;
-    }
-    
-    // Handle year selection
-    if (data.startsWith('year_')) {
-        const year = data.split('_')[1];
-        const user = getUser(userId);
-        
-        updateUser(userId, { shop_year: year });
-        
-        bot.editMessageText(getText(userId, 'select_month'), {
-            chat_id: userId,
-            message_id: messageId,
-            ...getMonthKeyboard(userId, user.shop_type, year)
-        });
-        return;
-    }
-    
-    // Handle month selection
-    if (data.startsWith('month_')) {
-        const month = data.split('_')[1];
-        const user = getUser(userId);
-        
-        updateUser(userId, { shop_month: month });
-        
-        bot.editMessageText(getText(userId, 'enter_username'), {
-            chat_id: userId,
-            message_id: messageId
-        });
-        
-        updateUser(userId, { state: 'waiting_username' });
-        return;
-    }
-    
-    // Handle username confirmation
-    if (data === 'confirm_username') {
-        const user = getUser(userId);
-        const products = readDB(DB_PRODUCTS);
-        const product = products[user.shop_type][user.shop_year][user.shop_month];
-        
-        let message = `💰 ${getText(userId, 'group_price')} ${product.price} USDT\n\n`;
-        message += getText(userId, 'enter_count');
-        
-        bot.editMessageText(message, {
-            chat_id: userId,
-            message_id: messageId
-        });
-        
-        updateUser(userId, { state: 'waiting_quantity' });
-        return;
-    }
-    
-    if (data === 'cancel_username') {
-        bot.editMessageText(getText(userId, 'main_menu'), {
-            chat_id: userId,
-            message_id: messageId
-        });
-        updateUser(userId, { state: null });
-        return;
-    }
-    
-    // Handle statistics update
-    if (data === 'update_stats') {
-        bot.editMessageText(formatStatistics(userId), {
-            chat_id: userId,
-            message_id: messageId,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: getText(userId, 'update'), callback_data: 'update_stats' }]
-                ]
+        // Handle deposit rejection (admin only)
+        if (data.startsWith('reject_deposit_') && isAdmin(userId)) {
+            const depositId = data.split('_')[2];
+            const deposits = readDB(DB_DEPOSITS);
+            
+            if (deposits[depositId]) {
+                const deposit = deposits[depositId];
+                
+                // Mark deposit as rejected
+                deposits[depositId].status = 'rejected';
+                deposits[depositId].rejected_at = Date.now();
+                writeDB(DB_DEPOSITS, deposits);
+                
+                // Notify user
+                bot.sendMessage(deposit.userId, `❌ Your deposit of ${deposit.amount} USDT has been rejected. Please contact support.`);
+                
+                // Update admin message
+                bot.editMessageText(`❌ Deposit rejected!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`, {
+                    chat_id: userId,
+                    message_id: messageId
+                });
             }
-        });
-        return;
-    }
-    
-    // Handle deposit approval (admin only)
-    if (data.startsWith('approve_deposit_') && ADMIN_IDS.includes(userId)) {
-        const depositId = data.split('_')[2];
-        const deposits = readDB(DB_DEPOSITS);
-        
-        if (deposits[depositId]) {
-            const deposit = deposits[depositId];
-            const targetUser = getUser(deposit.userId);
-            
-            // Add balance to user
-            updateUser(deposit.userId, { 
-                balance: targetUser.balance + deposit.amount,
-                deposited: targetUser.deposited + deposit.amount
-            });
-            
-            // Mark deposit as approved
-            deposits[depositId].status = 'approved';
-            deposits[depositId].approved_at = Date.now();
-            writeDB(DB_DEPOSITS, deposits);
-            
-            // Notify user
-            bot.sendMessage(deposit.userId, `✅ Your deposit of ${deposit.amount} USDT has been approved!`);
-            
-            // Update admin message
-            bot.editMessageText(`✅ Deposit approved!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`, {
-                chat_id: userId,
-                message_id: messageId
-            });
+            bot.answerCallbackQuery(query.id);
+            return;
         }
-        return;
-    }
-    
-    // Handle deposit rejection (admin only)
-    if (data.startsWith('reject_deposit_') && ADMIN_IDS.includes(userId)) {
-        const depositId = data.split('_')[2];
-        const deposits = readDB(DB_DEPOSITS);
         
-        if (deposits[depositId]) {
-            const deposit = deposits[depositId];
-            
-            // Mark deposit as rejected
-            deposits[depositId].status = 'rejected';
-            deposits[depositId].rejected_at = Date.now();
-            writeDB(DB_DEPOSITS, deposits);
-            
-            // Notify user
-            bot.sendMessage(deposit.userId, `❌ Your deposit of ${deposit.amount} USDT has been rejected. Please contact support.`);
-            
-            // Update admin message
-            bot.editMessageText(`❌ Deposit rejected!\n\nUser: ${deposit.userId}\nAmount: ${deposit.amount} USDT`, {
-                chat_id: userId,
-                message_id: messageId
-            });
-        }
-        return;
+        bot.answerCallbackQuery(query.id);
+        
+    } catch (error) {
+        console.error('Error handling callback query:', error);
+        bot.answerCallbackQuery(query.id, { text: 'An error occurred. Please try again.', show_alert: true });
     }
-    
-    bot.answerCallbackQuery(query.id);
 });
 
 // Handle text messages
 bot.on('message', async (msg) => {
     if (msg.text && msg.text.startsWith('/')) return; // Skip commands
+    if (msg.photo) return; // Skip photos (handled separately)
     
     const userId = msg.from.id;
     const user = getUser(userId);
     const text = msg.text;
     
-    // Check if user needs to set language first
-    if (!user.language_set) {
-        bot.sendMessage(userId, getText(userId, 'welcome'), getLanguageKeyboard());
-        return;
-    }
+    if (!text) return;
     
-    // Check channel membership
-    const isMember = await checkChannelMembership(userId);
-    if (!isMember) {
-        bot.sendMessage(userId, getText(userId, 'join_channel'), {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: getText(userId, 'join_button'), url: `https://t.me/${REQUIRED_CHANNEL.replace('@', '')}` }
-                    ],
-                    [
-                        { text: getText(userId, 'check_button'), callback_data: 'check_membership' }
-                    ]
-                ]
-            }
-        });
-        return;
-    }
-    
-    // Handle states
-    if (user.state === 'waiting_custom_amount') {
-        const amount = parseFloat(text);
-        if (isNaN(amount) || amount < 1) {
-            bot.sendMessage(userId, getText(userId, 'min_amount'));
+    try {
+        // Check if user needs to set language first
+        if (!user.language_set) {
+            bot.sendMessage(userId, getText(userId, 'welcome'), getLanguageKeyboard());
             return;
         }
         
-        updateUser(userId, { pending_deposit: amount, state: null });
-        bot.sendMessage(userId, getText(userId, 'network_select'), getNetworkKeyboard(userId));
-        return;
-    }
-    
-    if (user.state === 'waiting_username') {
-        const username = text.trim();
-        
-        let message = `${getText(userId, 'confirm_username')}\n\n@${username}`;
-        
-        updateUser(userId, { pending_username: username });
-        
-        bot.sendMessage(userId, message, {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: getText(userId, 'confirm'), callback_data: 'confirm_username' },
-                        { text: getText(userId, 'cancel'), callback_data: 'cancel_username' }
-                    ]
-                ]
-            }
-        });
-        return;
-    }
-    
-    if (user.state === 'waiting_quantity') {
-        const quantity = parseInt(text);
-        if (isNaN(quantity) || quantity < 1) {
-            bot.sendMessage(userId, 'Please enter a valid quantity (minimum 1)');
-            return;
-        }
-        
-        const products = readDB(DB_PRODUCTS);
-        const product = products[user.shop_type][user.shop_year][user.shop_month];
-        const totalPrice = product.price * quantity;
-        
-        if (user.balance < totalPrice) {
-            bot.sendMessage(userId, `${getText(userId, 'insufficient_funds')} Please re-enter the count:`);
-            return;
-        }
-        
-        // Check stock
-        if (product.stock < quantity) {
-            bot.sendMessage(userId, `❌ Not enough stock. Available: ${product.stock} pcs`);
-            return;
-        }
-        
-        // Process order
-        const orderId = Date.now().toString();
-        const orders = readDB(DB_ORDERS);
-        
-        orders[orderId] = {
-            id: orderId,
-            userId: userId,
-            type: user.shop_type,
-            year: user.shop_year,
-            month: user.shop_month,
-            quantity: quantity,
-            price: product.price,
-            total: totalPrice,
-            username: user.pending_username,
-            status: 'pending',
-            created_at: Date.now()
-        };
-        
-        writeDB(DB_ORDERS, orders);
-        
-        // Update user balance
-        updateUser(userId, { 
-            balance: user.balance - totalPrice,
-            spent: user.spent + totalPrice,
-            orders: user.orders + 1,
-            state: null
-        });
-        
-        // Update product stock
-        products[user.shop_type][user.shop_year][user.shop_month].stock -= quantity;
-        writeDB(DB_PRODUCTS, products);
-        
-        // Send success message
-        let successMessage = `✅ Order Successful!\n\n`;
-        successMessage += `📦 Type: ${user.shop_type}\n`;
-        successMessage += `📅 Year: ${user.shop_year}\n`;
-        successMessage += `🗓️ Month: ${user.shop_month}\n`;
-        successMessage += `👤 Username: @${user.pending_username}\n`;
-        successMessage += `🔢 Quantity: ${quantity}\n`;
-        successMessage += `💰 Total: ${totalPrice} USDT\n`;
-        successMessage += `🆔 Order ID: ${orderId}`;
-        
-        bot.sendMessage(userId, successMessage, {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: 'Contact Admin', url: 'https://t.me/Sanjarbek_2557' }]
-                ]
-            }
-        });
-        
-        // Notify admin
-        ADMIN_IDS.forEach(adminId => {
-            bot.sendMessage(adminId, `🔔 New Order!\n\n${successMessage}`, {
+        // Check channel membership
+        const isMember = await checkChannelMembership(userId);
+        if (!isMember) {
+            bot.sendMessage(userId, getText(userId, 'join_channel'), {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: 'View Orders', callback_data: 'admin_orders' }]
+                        [
+                            { text: getText(userId, 'join_button'), url: `https://t.me/${REQUIRED_CHANNEL.replace('@', '')}` }
+                        ],
+                        [
+                            { text: getText(userId, 'check_button'), callback_data: 'check_membership' }
+                        ]
                     ]
                 }
             });
-        });
+            return;
+        }
         
-        return;
-    }
-    
-    if (user.state === 'support_chat') {
-        // Forward message to admin
-        ADMIN_IDS.forEach(adminId => {
-            bot.sendMessage(adminId, `💬 Support Message from ${userId}:\n\n${text}`, {
+        // Handle states
+        if (user.state === 'waiting_custom_amount') {
+            const amount = parseFloat(text);
+            if (isNaN(amount) || amount < 1) {
+                bot.sendMessage(userId, getText(userId, 'min_amount'));
+                return;
+            }
+            
+            updateUser(userId, { pending_deposit: amount, state: null });
+            bot.sendMessage(userId, getText(userId, 'network_select'), getNetworkKeyboard(userId));
+            return;
+        }
+        
+        if (user.state === 'waiting_username') {
+            const username = text.trim().replace('@', '');
+            
+            let message = `${getText(userId, 'confirm_username')}\n\n@${username}`;
+            
+            updateUser(userId, { pending_username: username });
+            
+            bot.sendMessage(userId, message, {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: 'Reply', callback_data: `support_reply_${userId}` }]
+                        [
+                            { text: getText(userId, 'confirm'), callback_data: 'confirm_username' },
+                            { text: getText(userId, 'cancel'), callback_data: 'cancel_username' }
+                        ]
                     ]
                 }
             });
-        });
+            return;
+        }
         
-        bot.sendMessage(userId, '✅ Your message has been sent to support. We will reply soon!');
-        return;
-    }
-    
-    // Handle main menu buttons
-    if (text === getText(userId, 'wallet')) {
-        let message = `💳 ${getText(userId, 'wallet')}\n\n`;
-        message += `💰 ${getText(userId, 'balance')} ${user.balance} USDT\n`;
-        message += `📋 ${getText(userId, 'your_orders')} ${user.orders} pcs\n`;
-        message += `📈 ${getText(userId, 'deposited')} ${user.deposited} USDT\n`;
-        message += `💸 ${getText(userId, 'spent')} ${user.spent} USDT`;
-        
-        bot.sendMessage(userId, message, {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: getText(userId, 'topup'), callback_data: 'show_topup' }]
-                ]
+        if (user.state === 'waiting_quantity') {
+            const quantity = parseInt(text);
+            if (isNaN(quantity) || quantity < 1) {
+                bot.sendMessage(userId, 'Please enter a valid quantity (minimum 1)');
+                return;
             }
-        });
-        return;
-    }
-    
-    if (text === getText(userId, 'shop')) {
-        bot.sendMessage(userId, getText(userId, 'select_type'), {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: getText(userId, 'group'), callback_data: 'shop_groups' },
-                        { text: getText(userId, 'channel'), callback_data: 'shop_channels' }
-                    ]
-                ]
+            
+            const products = readDB(DB_PRODUCTS);
+            const product = products[user.shop_type][user.shop_year][user.shop_month];
+            const totalPrice = product.price * quantity;
+            
+            if (user.balance < totalPrice) {
+                bot.sendMessage(userId, `${getText(userId, 'insufficient_funds')}`);
+                return;
             }
-        });
-        return;
-    }
-    
-    if (text === getText(userId, 'ready_made')) {
-        bot.sendMessage(userId, getText(userId, 'admin_ready_made'), {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: 'Contact Admin', url: 'https://t.me/Sanjarbek_2557' }]
-                ]
+            
+            // Check stock
+            if (product.stock < quantity) {
+                bot.sendMessage(userId, `❌ Not enough stock. Available: ${product.stock} pcs`);
+                return;
             }
-        });
-        return;
-    }
-    
-    if (text === getText(userId, 'orders')) {
-        const orders = readDB(DB_ORDERS);
-        const userOrders = Object.values(orders).filter(order => order.userId === userId);
-        
-        if (userOrders.length === 0) {
-            bot.sendMessage(userId, getText(userId, 'no_orders'), {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: getText(userId, 'order_history'), callback_data: 'order_history' }]
-                    ]
-                }
-            });
-        } else {
-            let message = `📋 Your Active Orders:\n\n`;
-            userOrders.forEach(order => {
-                message += `🆔 ${order.id}\n`;
-                message += `📦 ${order.type} - ${order.year} - ${order.month}\n`;
-                message += `🔢 Quantity: ${order.quantity}\n`;
-                message += `💰 Total: ${order.total} USDT\n`;
-                message += `📅 ${new Date(order.created_at).toLocaleDateString()}\n\n`;
+            
+            // Process order
+            const orderId = Date.now().toString();
+            const orders = readDB(DB_ORDERS);
+            
+            orders[orderId] = {
+                id: orderId,
+                userId: userId,
+                type: user.shop_type,
+                year: user.shop_year,
+                month: user.shop_month,
+                quantity: quantity,
+                price: product.price,
+                total: totalPrice,
+                username: user.pending_username,
+                status: 'pending',
+                created_at: Date.now()
+            };
+            
+            writeDB(DB_ORDERS, orders);
+            
+            // Update user balance
+            updateUser(userId, { 
+                balance: user.balance - totalPrice,
+                spent: user.spent + totalPrice,
+                orders: user.orders + 1,
+                state: null
             });
             
-            bot.sendMessage(userId, message);
+            // Update product stock
+            products[user.shop_type][user.shop_year][user.shop_month].stock -= quantity;
+            writeDB(DB_PRODUCTS, products);
+            
+            // Send success message
+            let successMessage = `✅ ${getText(userId, 'order_success')}\n\n`;
+            successMessage += `📦 Type: ${user.shop_type}\n`;
+            successMessage += `📅 Year: ${user.shop_year}\n`;
+            successMessage += `🗓️ Month: ${user.shop_month}\n`;
+            successMessage += `👤 Username: @${user.pending_username}\n`;
+            successMessage += `🔢 Quantity: ${quantity}\n`;
+            successMessage += `💰 Total: ${totalPrice} USDT\n`;
+            successMessage += `🆔 ${getText(userId, 'order_id')} ${orderId}`;
+            
+            bot.sendMessage(userId, successMessage, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'contact_admin'), url: `https://t.me/${ADMIN_USERNAME.replace('@', '')}` }]
+                    ]
+                }
+            });
+            
+            // Notify admin
+            ADMIN_IDS.forEach(adminId => {
+                bot.sendMessage(adminId, `🔔 ${getText(userId, 'new_order')}\n\n${successMessage}`, {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: 'View Orders', callback_data: 'admin_orders' }]
+                        ]
+                    }
+                });
+            });
+            
+            return;
         }
-        return;
-    }
-    
-    if (text === getText(userId, 'statistics')) {
-        bot.sendMessage(userId, formatStatistics(userId), {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: getText(userId, 'update'), callback_data: 'update_stats' }]
-                ]
-            }
-        });
-        return;
-    }
-    
-    if (text === getText(userId, 'support')) {
-        bot.sendMessage(userId, getText(userId, 'send_feedback'), {
-            reply_markup: {
-                keyboard: [
-                    [{ text: getText(userId, 'back') }]
-                ],
-                resize_keyboard: true
-            }
-        });
         
-        updateUser(userId, { state: 'support_chat' });
-        return;
-    }
-    
-    if (text === getText(userId, 'guide')) {
-        bot.sendMessage(userId, getText(userId, 'guide_text'));
-        return;
-    }
-    
-    if (text === getText(userId, 'settings')) {
-        bot.sendMessage(userId, getText(userId, 'welcome'), getLanguageKeyboard());
-        return;
-    }
-    
-    if (text === getText(userId, 'back')) {
-        updateUser(userId, { state: null });
-        bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
-        return;
-    }
-    
-    // Handle callback queries that are sent via inline keyboards
-    if (text === 'show_topup') {
-        bot.sendMessage(userId, getText(userId, 'select_amount'), getTopupKeyboard(userId));
-        return;
+        if (user.state === 'support_chat') {
+            // Forward message to admin
+            ADMIN_IDS.forEach(adminId => {
+                bot.sendMessage(adminId, `💬 Support Message from ${userId}:\n\n${text}`, {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: 'Reply', callback_data: `support_reply_${userId}` }]
+                        ]
+                    }
+                });
+            });
+            
+            bot.sendMessage(userId, '✅ Your message has been sent to support. We will reply soon!');
+            return;
+        }
+        
+        // Handle main menu buttons
+        if (text === getText(userId, 'wallet')) {
+            let message = `💳 ${getText(userId, 'wallet')}\n\n`;
+            message += `💰 ${getText(userId, 'balance')} ${user.balance} USDT\n`;
+            message += `📋 ${getText(userId, 'your_orders')} ${user.orders} pcs\n`;
+            message += `📈 ${getText(userId, 'deposited')} ${user.deposited} USDT\n`;
+            message += `💸 ${getText(userId, 'spent')} ${user.spent} USDT`;
+            
+            bot.sendMessage(userId, message, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'topup'), callback_data: 'show_topup' }]
+                    ]
+                }
+            });
+            return;
+        }
+        
+        if (text === getText(userId, 'shop')) {
+            bot.sendMessage(userId, getText(userId, 'select_type'), {
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: getText(userId, 'group'), callback_data: 'shop_groups' },
+                            { text: getText(userId, 'channel'), callback_data: 'shop_channels' }
+                        ]
+                    ]
+                }
+            });
+            return;
+        }
+        
+        if (text === getText(userId, 'ready_made')) {
+            bot.sendMessage(userId, getText(userId, 'admin_ready_made'), {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'contact_admin'), url: `https://t.me/${ADMIN_USERNAME.replace('@', '')}` }]
+                    ]
+                }
+            });
+            return;
+        }
+        
+        if (text === getText(userId, 'orders')) {
+            const orders = readDB(DB_ORDERS);
+            const userOrders = Object.values(orders).filter(order => order.userId === userId);
+            
+            if (userOrders.length === 0) {
+                bot.sendMessage(userId, getText(userId, 'no_orders'), {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: getText(userId, 'order_history'), callback_data: 'order_history' }]
+                        ]
+                    }
+                });
+            } else {
+                let message = `📋 Your Active Orders:\n\n`;
+                userOrders.forEach(order => {
+                    message += `🆔 ${order.id}\n`;
+                    message += `📦 ${order.type} - ${order.year} - ${order.month}\n`;
+                    message += `🔢 Quantity: ${order.quantity}\n`;
+                    message += `💰 Total: ${order.total} USDT\n`;
+                    message += `📅 ${new Date(order.created_at).toLocaleDateString()}\n\n`;
+                });
+                
+                bot.sendMessage(userId, message);
+            }
+            return;
+        }
+        
+        if (text === getText(userId, 'statistics')) {
+            bot.sendMessage(userId, formatStatistics(userId), {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: getText(userId, 'update'), callback_data: 'update_stats' }]
+                    ]
+                }
+            });
+            return;
+        }
+        
+        if (text === getText(userId, 'support')) {
+            bot.sendMessage(userId, getText(userId, 'send_feedback'), getCancelKeyboard(userId));
+            updateUser(userId, { state: 'support_chat' });
+            return;
+        }
+        
+        if (text === getText(userId, 'guide')) {
+            bot.sendMessage(userId, getText(userId, 'guide_text'));
+            return;
+        }
+        
+        if (text === getText(userId, 'settings')) {
+            bot.sendMessage(userId, getText(userId, 'welcome'), getLanguageKeyboard());
+            return;
+        }
+        
+        if (text === getText(userId, 'back')) {
+            updateUser(userId, { state: null });
+            bot.sendMessage(userId, getText(userId, 'main_menu'), getMainMenuKeyboard(userId));
+            return;
+        }
+        
+    } catch (error) {
+        console.error('Error handling message:', error);
+        bot.sendMessage(userId, 'An error occurred. Please try again.');
     }
 });
 
@@ -1333,40 +1786,45 @@ bot.on('photo', async (msg) => {
     const userId = msg.from.id;
     const user = getUser(userId);
     
-    if (user.state === 'waiting_transfer_proof') {
-        const depositId = Date.now().toString();
-        const deposits = readDB(DB_DEPOSITS);
-        
-        deposits[depositId] = {
-            id: depositId,
-            userId: userId,
-            amount: user.pending_deposit,
-            network: user.selected_network,
-            photo_id: msg.photo[msg.photo.length - 1].file_id,
-            status: 'pending',
-            created_at: Date.now()
-        };
-        
-        writeDB(DB_DEPOSITS, deposits);
-        
-        // Send to admin for approval
-        ADMIN_IDS.forEach(adminId => {
-            bot.sendPhoto(adminId, msg.photo[msg.photo.length - 1].file_id, {
-                caption: `💰 New Deposit Request\n\nUser: ${userId}\nAmount: ${user.pending_deposit} USDT\nNetwork: ${user.selected_network}\nDeposit ID: ${depositId}`,
-                reply_markup: {
-                    inline_keyboard: [
-                        [
-                            { text: '✅ Approve', callback_data: `approve_deposit_${depositId}` },
-                            { text: '❌ Reject', callback_data: `reject_deposit_${depositId}` }
+    try {
+        if (user.state === 'waiting_transfer_proof') {
+            const depositId = Date.now().toString();
+            const deposits = readDB(DB_DEPOSITS);
+            
+            deposits[depositId] = {
+                id: depositId,
+                userId: userId,
+                amount: user.pending_deposit,
+                network: user.selected_network,
+                photo_id: msg.photo[msg.photo.length - 1].file_id,
+                status: 'pending',
+                created_at: Date.now()
+            };
+            
+            writeDB(DB_DEPOSITS, deposits);
+            
+            // Send to admin for approval
+            ADMIN_IDS.forEach(adminId => {
+                bot.sendPhoto(adminId, msg.photo[msg.photo.length - 1].file_id, {
+                    caption: `💰 New Deposit Request\n\nUser: ${userId}\nAmount: ${user.pending_deposit} USDT\nNetwork: ${user.selected_network}\nDeposit ID: ${depositId}`,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: '✅ Approve', callback_data: `approve_deposit_${depositId}` },
+                                { text: '❌ Reject', callback_data: `reject_deposit_${depositId}` }
+                            ]
                         ]
-                    ]
-                }
+                    }
+                });
             });
-        });
-        
-        bot.sendMessage(userId, getText(userId, 'wait_confirmation'));
-        updateUser(userId, { state: null });
-        return;
+            
+            bot.sendMessage(userId, getText(userId, 'wait_confirmation'));
+            updateUser(userId, { state: null });
+            return;
+        }
+    } catch (error) {
+        console.error('Error handling photo:', error);
+        bot.sendMessage(userId, 'An error occurred while processing your photo. Please try again.');
     }
 });
 
@@ -1380,11 +1838,20 @@ bot.on('polling_error', (error) => {
 });
 
 console.log('🚀 Bot started successfully!');
-console.log('📝 Make sure to:');
+console.log('📝 Configuration:');
+console.log(`- Channel: ${REQUIRED_CHANNEL}`);
+console.log(`- Channel ID: ${REQUIRED_CHANNEL_ID}`);
+console.log(`- Admin Username: ${ADMIN_USERNAME}`);
+console.log(`- Admin IDs: ${ADMIN_IDS.join(', ')}`);
+console.log(`- Group Price: $${DEFAULT_PRICES.groups}`);
+console.log(`- Channel Price: $${DEFAULT_PRICES.channels}`);
+console.log('\n📋 Setup Instructions:');
 console.log('1. Replace BOT_TOKEN with your actual bot token');
 console.log('2. Replace ADMIN_IDS with your admin Telegram IDs');
 console.log('3. Replace REQUIRED_CHANNEL with your channel username');
-console.log('4. Install required dependencies: npm install node-telegram-bot-api');
+console.log('4. Replace REQUIRED_CHANNEL_ID with your channel ID');
+console.log('5. Update ADMIN_USERNAME with your admin username');
+console.log('6. Install dependencies: npm install node-telegram-bot-api');
 
 // Export bot for potential external use
 module.exports = bot;
