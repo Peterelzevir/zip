@@ -9,8 +9,7 @@ const crypto = require('crypto');
 const path = require('path');
 
 // Konfigurasi Bot
-const BOT_TOKEN = '7508883526:AAEqe2f48tCzwtlCjbUyEBJMzTDg7J6jPME
-'; // Ganti dengan token bot Anda
+const BOT_TOKEN = '7508883526:AAEqe2f48tCzwtlCjbUyEBJMzTDg7J6jPME'; // Ganti dengan token bot Anda
 const MAIN_ADMIN = 5406507431; // Ganti dengan user ID admin utama
 const DATA_FILE = './bot_data.json';
 
