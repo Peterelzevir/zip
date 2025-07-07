@@ -1,4 +1,3 @@
-//
 // ENHANCED SECURITY BOT V7.0 - FULL FEATURED
 // CODING BY @hiyaok ON TELEGRAM
 // U CAN ORDERS JASA BOT TO @hiyaok
@@ -2633,6 +2632,445 @@ bot.action('clear_logs_execute', async (ctx) => {
             ])
         }
     );
+});
+
+// ===== MISSING CALLBACK HANDLERS =====
+
+// 1. Admin Logs Handler (MISSING)
+bot.action('admin_logs', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    // Collect admin activities
+    const adminActivities = [];
+    
+    // Add recent admin actions from botData
+    Object.entries(botData.userViolations).forEach(([userId, data]) => {
+        if (botData.admins.includes(parseInt(userId))) {
+            adminActivities.push({
+                adminId: userId,
+                action: 'Violation Cleared',
+                timestamp: data.lastViolation,
+                details: `${data.count} violations`
+            });
+        }
+    });
+    
+    // Add group management activities
+    botData.groups.forEach(group => {
+        adminActivities.push({
+            adminId: 'System',
+            action: 'Group Added',
+            timestamp: group.addedAt,
+            details: group.name
+        });
+    });
+    
+    // Add ban activities
+    Object.entries(botData.bannedUsers).forEach(([userId, ban]) => {
+        adminActivities.push({
+            adminId: 'System',
+            action: 'User Banned',
+            timestamp: ban.timestamp,
+            details: `User ${userId} - ${ban.reason}`
+        });
+    });
+    
+    // Sort by timestamp (newest first)
+    adminActivities.sort((a, b) => b.timestamp - a.timestamp);
+    
+    let logsMessage = `📜 **ADMIN ACTIVITY LOGS**\n═══════════════════════════════════\n\n`;
+    
+    if (adminActivities.length === 0) {
+        logsMessage += `✅ No admin activities recorded yet.\n`;
+    } else {
+        logsMessage += `**RECENT ADMIN ACTIVITIES:**\n\n`;
+        adminActivities.slice(0, 15).forEach((activity, index) => {
+            logsMessage += `${index + 1}. **${activity.action}**\n`;
+            logsMessage += `   └ Admin: \`${activity.adminId}\`\n`;
+            logsMessage += `   └ Time: ${formatTime(activity.timestamp)}\n`;
+            logsMessage += `   └ Details: ${activity.details}\n\n`;
+        });
+        
+        if (adminActivities.length > 15) {
+            logsMessage += `... and ${adminActivities.length - 15} more activities\n\n`;
+        }
+    }
+    
+    logsMessage += `📊 **SUMMARY:**\n`;
+    logsMessage += `• Total Activities: **${adminActivities.length}**\n`;
+    logsMessage += `• Active Admins: **${botData.admins.length}**\n`;
+    logsMessage += `• Last Activity: ${adminActivities.length > 0 ? formatTime(adminActivities[0].timestamp) : 'None'}\n`;
+    
+    await ctx.editMessageText(logsMessage, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+            [
+                Markup.button.callback('📥 Export Admin Logs', 'export_admin_logs'),
+                Markup.button.callback('🧹 Clear Admin Logs', 'clear_admin_logs_confirm')
+            ],
+            [
+                Markup.button.callback('🔄 Refresh Logs', 'admin_logs'),
+                Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')
+            ]
+        ])
+    });
+});
+
+// 2. Export Admin Logs Handler (ADDITIONAL)
+bot.action('export_admin_logs', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    const adminLogs = [];
+    
+    // Collect comprehensive admin logs
+    adminLogs.push(`ADMIN ACTIVITY LOGS EXPORT`);
+    adminLogs.push(`Generated: ${formatTime(Date.now())}`);
+    adminLogs.push(`Bot: ${ctx.botInfo.username}`);
+    adminLogs.push(`═══════════════════════════════════\n`);
+    
+    // Current admin status
+    adminLogs.push(`CURRENT ADMINS:`);
+    for (const adminId of botData.admins) {
+        try {
+            const adminInfo = await bot.telegram.getChat(adminId);
+            adminLogs.push(`• ${adminInfo.first_name || 'Unknown'} (${adminId}) ${adminId === MAIN_ADMIN ? '[MAIN ADMIN]' : ''}`);
+        } catch {
+            adminLogs.push(`• Unknown Admin (${adminId}) ${adminId === MAIN_ADMIN ? '[MAIN ADMIN]' : ''}`);
+        }
+    }
+    adminLogs.push('');
+    
+    // Group management logs
+    adminLogs.push(`GROUP MANAGEMENT HISTORY:`);
+    botData.groups.forEach(group => {
+        adminLogs.push(`• ${formatTime(group.addedAt)} - Added: ${group.name} (${group.id})`);
+    });
+    adminLogs.push('');
+    
+    // Ban history logs
+    adminLogs.push(`BAN HISTORY:`);
+    Object.entries(botData.bannedUsers).forEach(([userId, ban]) => {
+        const status = ban.until > Date.now() ? 'ACTIVE' : 'EXPIRED';
+        adminLogs.push(`• ${formatTime(ban.timestamp)} - Banned User ${userId} - ${ban.reason} [${status}]`);
+    });
+    adminLogs.push('');
+    
+    // System statistics
+    adminLogs.push(`SYSTEM STATISTICS:`);
+    adminLogs.push(`• Total Messages Processed: ${botData.stats.totalMessages}`);
+    adminLogs.push(`• Messages Deleted: ${botData.stats.deletedMessages}`);
+    adminLogs.push(`• Spam Detected: ${botData.stats.detectedSpam}`);
+    adminLogs.push(`• Total Violations: ${botData.stats.totalViolations}`);
+    adminLogs.push(`• Users Banned: ${botData.stats.bannedUsers}`);
+    adminLogs.push('');
+    
+    // Configuration logs
+    adminLogs.push(`CURRENT CONFIGURATION:`);
+    adminLogs.push(`• Detection Enabled: ${botData.detectionEnabled}`);
+    adminLogs.push(`• Lockdown Mode: ${botData.lockdownMode}`);
+    adminLogs.push(`• Max Violations: ${botData.settings.maxViolations}`);
+    adminLogs.push(`• Ban Duration: ${formatDuration(botData.settings.banDuration)}`);
+    adminLogs.push(`• Anti-Flood: ${botData.settings.antiFlood}`);
+    adminLogs.push(`• Anti-Link: ${botData.settings.antiLink}`);
+    adminLogs.push(`• Anti-Forward: ${botData.settings.antiForward}`);
+    
+    const logText = adminLogs.join('\n');
+    
+    try {
+        await ctx.replyWithDocument({
+            source: Buffer.from(logText),
+            filename: `admin_logs_${Date.now()}.txt`
+        });
+        
+        await ctx.answerCbQuery('📥 Admin logs exported successfully!');
+    } catch (error) {
+        await ctx.answerCbQuery('❌ Failed to export admin logs', { show_alert: true });
+    }
+});
+
+// 3. Clear Admin Logs Confirmation (ADDITIONAL)
+bot.action('clear_admin_logs_confirm', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    await ctx.editMessageText(
+        `🧹 **CLEAR ADMIN LOGS CONFIRMATION**\n` +
+        `═══════════════════════════════════\n\n` +
+        `Are you sure you want to clear admin activity logs?\n\n` +
+        `This will remove:\n` +
+        `• All recorded admin activities\n` +
+        `• All group management history\n` +
+        `• All ban history records\n\n` +
+        `⚠️ This action cannot be undone!`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [
+                    Markup.button.callback('✅ Yes, Clear All', 'clear_admin_logs_execute'),
+                    Markup.button.callback('❌ Cancel', 'admin_logs')
+                ]
+            ])
+        }
+    );
+});
+
+// 4. Execute Clear Admin Logs (ADDITIONAL)
+bot.action('clear_admin_logs_execute', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    // Clear admin-related logs
+    const clearedCount = Object.keys(botData.userViolations).length;
+    
+    // Reset admin activity data
+    botData.userViolations = {};
+    
+    // Clear ban history (keep active bans)
+    const activeBans = {};
+    const now = Date.now();
+    Object.entries(botData.bannedUsers).forEach(([userId, ban]) => {
+        if (ban.until > now) {
+            activeBans[userId] = ban;
+        }
+    });
+    botData.bannedUsers = activeBans;
+    
+    await saveData();
+    
+    await ctx.editMessageText(
+        `✅ **ADMIN LOGS CLEARED**\n` +
+        `═══════════════════════════════════\n\n` +
+        `🗑️ Cleared: **${clearedCount}** activity records\n` +
+        `⏰ Cleared: ${formatTime(Date.now())}\n\n` +
+        `Admin activity logs have been reset.\n` +
+        `Active bans are preserved.`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🔙 Back to Admin Menu', 'admin_menu')]
+            ])
+        }
+    );
+});
+
+// 5. Enhanced Toggle Group Status (IMPROVEMENT)
+bot.action('toggle_group_status', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    if (botData.groups.length === 0) {
+        await ctx.editMessageText(
+            `🔄 **GROUP STATUS MANAGEMENT**\n` +
+            `═══════════════════════════════════\n\n` +
+            `❌ No groups registered yet.\n\n` +
+            `Use "Add Group" to register groups first.`,
+            {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('➕ Add Group', 'add_group')],
+                    [Markup.button.callback('🔙 Back to Group Menu', 'group_menu')]
+                ])
+            }
+        );
+        return;
+    }
+    
+    const activeGroups = botData.groups.filter(g => g.active).length;
+    const inactiveGroups = botData.groups.length - activeGroups;
+    
+    const groupButtons = botData.groups.map(group => [
+        Markup.button.callback(
+            `${group.active ? '🟢' : '🔴'} ${group.name}`,
+            `toggle_group_${group.id}`
+        )
+    ]);
+    
+    await ctx.editMessageText(
+        `🔄 **GROUP STATUS MANAGEMENT**\n` +
+        `═══════════════════════════════════\n\n` +
+        `📊 **Current Status:**\n` +
+        `• Active Groups: **${activeGroups}** 🟢\n` +
+        `• Inactive Groups: **${inactiveGroups}** 🔴\n` +
+        `• Total Groups: **${botData.groups.length}**\n\n` +
+        `Click on a group to toggle its status:\n` +
+        `🟢 = Active (Protected) | 🔴 = Inactive (No Protection)`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                ...groupButtons,
+                [
+                    Markup.button.callback('🟢 Activate All', 'activate_all_groups'),
+                    Markup.button.callback('🔴 Deactivate All', 'deactivate_all_groups')
+                ],
+                [
+                    Markup.button.callback('🔄 Refresh Status', 'toggle_group_status'),
+                    Markup.button.callback('🔙 Back to Group Menu', 'group_menu')
+                ]
+            ])
+        }
+    );
+});
+
+// 6. Activate All Groups (ADDITIONAL)
+bot.action('activate_all_groups', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    let activatedCount = 0;
+    botData.groups.forEach(group => {
+        if (!group.active) {
+            group.active = true;
+            activatedCount++;
+        }
+    });
+    
+    await saveData();
+    
+    await ctx.answerCbQuery(`✅ Activated ${activatedCount} groups`);
+    
+    // Refresh the status menu
+    const activeGroups = botData.groups.filter(g => g.active).length;
+    const groupButtons = botData.groups.map(group => [
+        Markup.button.callback(
+            `${group.active ? '🟢' : '🔴'} ${group.name}`,
+            `toggle_group_${group.id}`
+        )
+    ]);
+    
+    await ctx.editMessageText(
+        `🔄 **GROUP STATUS MANAGEMENT**\n` +
+        `═══════════════════════════════════\n\n` +
+        `✅ **All groups activated!**\n\n` +
+        `📊 **Current Status:**\n` +
+        `• Active Groups: **${activeGroups}** 🟢\n` +
+        `• Total Groups: **${botData.groups.length}**\n\n` +
+        `All groups are now under protection.`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                ...groupButtons.slice(0, 8), // Limit buttons to prevent overflow
+                [
+                    Markup.button.callback('🔄 Refresh Status', 'toggle_group_status'),
+                    Markup.button.callback('🔙 Back to Group Menu', 'group_menu')
+                ]
+            ])
+        }
+    );
+});
+
+// 7. Deactivate All Groups (ADDITIONAL)  
+bot.action('deactivate_all_groups', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    await ctx.editMessageText(
+        `⚠️ **DEACTIVATE ALL GROUPS**\n` +
+        `═══════════════════════════════════\n\n` +
+        `Are you sure you want to deactivate ALL groups?\n\n` +
+        `This will:\n` +
+        `• Disable protection for all ${botData.groups.length} groups\n` +
+        `• Stop all security monitoring\n` +
+        `• Allow unrestricted messaging\n\n` +
+        `⚠️ This can be dangerous!`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [
+                    Markup.button.callback('✅ Yes, Deactivate All', 'confirm_deactivate_all'),
+                    Markup.button.callback('❌ Cancel', 'toggle_group_status')
+                ]
+            ])
+        }
+    );
+});
+
+// 8. Confirm Deactivate All Groups (ADDITIONAL)
+bot.action('confirm_deactivate_all', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    let deactivatedCount = 0;
+    botData.groups.forEach(group => {
+        if (group.active) {
+            group.active = false;
+            deactivatedCount++;
+        }
+    });
+    
+    await saveData();
+    
+    await ctx.editMessageText(
+        `🔴 **ALL GROUPS DEACTIVATED**\n` +
+        `═══════════════════════════════════\n\n` +
+        `⚠️ **${deactivatedCount} groups deactivated**\n` +
+        `⏰ **Deactivated:** ${formatTime(Date.now())}\n\n` +
+        `🚨 **WARNING:**\n` +
+        `All groups are now unprotected!\n` +
+        `No security monitoring is active.\n\n` +
+        `Use "Activate All" to restore protection.`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [
+                    Markup.button.callback('🟢 Activate All', 'activate_all_groups'),
+                    Markup.button.callback('🔄 Manage Individual', 'toggle_group_status')
+                ],
+                [
+                    Markup.button.callback('🔙 Back to Group Menu', 'group_menu')
+                ]
+            ])
+        }
+    );
+});
+
+// 9. Enhanced Individual Group Toggle (IMPROVEMENT)
+bot.action(/^toggle_group_(-?\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    
+    const groupId = parseInt(ctx.match[1]);
+    const group = botData.groups.find(g => g.id === groupId);
+    
+    if (group) {
+        const oldStatus = group.active;
+        group.active = !group.active;
+        await saveData();
+        
+        await ctx.answerCbQuery(
+            `${group.active ? '🟢 Activated' : '🔴 Deactivated'}: ${group.name}`,
+            { show_alert: false }
+        );
+        
+        // Enhanced status update message
+        const activeGroups = botData.groups.filter(g => g.active).length;
+        const inactiveGroups = botData.groups.length - activeGroups;
+        
+        const groupButtons = botData.groups.map(g => [
+            Markup.button.callback(
+                `${g.active ? '🟢' : '🔴'} ${g.name}`,
+                `toggle_group_${g.id}`
+            )
+        ]);
+        
+        await ctx.editMessageText(
+            `🔄 **GROUP STATUS UPDATED**\n` +
+            `═══════════════════════════════════\n\n` +
+            `✅ **${group.name}** is now ${group.active ? '🟢 ACTIVE' : '🔴 INACTIVE'}\n\n` +
+            `📊 **Overall Status:**\n` +
+            `• Active Groups: **${activeGroups}** 🟢\n` +
+            `• Inactive Groups: **${inactiveGroups}** 🔴\n` +
+            `• Total Groups: **${botData.groups.length}**\n\n` +
+            `${group.active ? 
+                '🛡️ Group is now protected by security monitoring' : 
+                '⚠️ Group protection has been disabled'}\n\n` +
+            `Click on groups to toggle status:`,
+            {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                    ...groupButtons.slice(0, 8), // Limit to prevent overflow
+                    [
+                        Markup.button.callback('🔄 Refresh', 'toggle_group_status'),
+                        Markup.button.callback('🔙 Back', 'group_menu')
+                    ]
+                ])
+            }
+        );
+    } else {
+        await ctx.answerCbQuery('❌ Group not found!', { show_alert: true });
+    }
 });
 
 bot.action('clean_violations', async (ctx) => {
